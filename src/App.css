@@ -212,6 +212,17 @@
   font-size: 0.79rem;
 }
 
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-stack span {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
 .tag-row {
   display: flex;
   align-items: center;
@@ -229,6 +240,81 @@
 .tag-row.active {
   border-color: #c9dafc;
   background: #eef4ff;
+}
+
+.shloka-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.shloka-form-panel {
+  align-self: start;
+}
+
+.shloka-input,
+.shloka-textarea {
+  width: 100%;
+  border: 1px solid #dde3eb;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.shloka-input {
+  min-height: 42px;
+  padding: 0.7rem 0.82rem;
+}
+
+.shloka-textarea {
+  min-height: 168px;
+  padding: 0.78rem 0.82rem;
+  resize: vertical;
+}
+
+.shloka-select {
+  width: 100%;
+}
+
+.shloka-form-actions,
+.shloka-card-actions,
+.shloka-tag-group,
+.shloka-baskets {
+  display: flex;
+  gap: 8px;
+}
+
+.shloka-form-actions,
+.shloka-baskets {
+  flex-direction: column;
+}
+
+.shloka-card {
+  gap: 8px;
+}
+
+.shloka-reference {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.shloka-tag-group {
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.shloka-tag-chip {
+  padding: 0.24rem 0.58rem;
+  border: 1px solid #d6e5ff;
+  border-radius: 999px;
+  background: #edf4ff;
+  color: #245fc2;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 
 .workspace {
@@ -659,6 +745,10 @@
 @media (max-width: 1120px) {
   .page-shell {
     width: 100%;
+  }
+
+  .shloka-layout {
+    grid-template-columns: 1fr;
   }
 }
 

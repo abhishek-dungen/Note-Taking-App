@@ -40,6 +40,17 @@ import {
   type TagResult,
 } from './lib/notes'
 import {
+  createShloka,
+  formatShlokaTags,
+  getShlokaTagSummaries,
+  loadShlokas,
+  matchesShlokaSearch,
+  parseShlokaTags,
+  saveShlokas,
+  type Shloka,
+  type ShlokaStatus,
+} from './lib/shlokas'
+import {
   ensureSupabaseUser,
   fetchCloudNotes,
   subscribeToCloudNotes,
@@ -59,7 +70,7 @@ type PendingTagFocus = {
   requestId: number
 }
 
-type PageView = 'editor' | 'notes' | 'tags'
+type PageView = 'editor' | 'notes' | 'tags' | 'shlokas'
 type SaveState = 'saved' | 'saving' | 'error' | 'sync' | 'offline'
 
 const FONT_FAMILIES = [
@@ -90,10 +101,21 @@ function getOnlineStatus() {
 
 function App() {
   const [notes, setNotes] = useState<Note[]>([])
+  const [shlokas, setShlokas] = useState<Shloka[]>(() =>
+    typeof window === 'undefined' ? [] : loadShlokas(),
+  )
   const [activeNoteId, setActiveNoteId] = useState('')
   const [currentPage, setCurrentPage] = useState<PageView>('editor')
   const [tagSearch, setTagSearch] = useState('')
   const [selectedTagId, setSelectedTagId] = useState('')
+  const [shlokaSearch, setShlokaSearch] = useState('')
+  const [selectedShlokaTagId, setSelectedShlokaTagId] = useState('')
+  const [editingShlokaId, setEditingShlokaId] = useState('')
+  const [shlokaTitle, setShlokaTitle] = useState('')
+  const [shlokaReference, setShlokaReference] = useState('')
+  const [shlokaText, setShlokaText] = useState('')
+  const [shlokaTagsInput, setShlokaTagsInput] = useState('')
+  const [shlokaStatus, setShlokaStatus] = useState<ShlokaStatus>('memorizing')
   const [pendingTagFocus, setPendingTagFocus] = useState<PendingTagFocus | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('sync')
   const [saveMessage, setSaveMessage] = useState('Connecting to Supabase…')
@@ -116,6 +138,10 @@ function App() {
   useEffect(() => {
     cloudUserIdRef.current = cloudUserId
   }, [cloudUserId])
+
+  useEffect(() => {
+    saveShlokas(shlokas)
+  }, [shlokas])
 
   const clearSyncTimers = useCallback(() => {
     if (cloudSyncTimeoutRef.current) {
@@ -422,6 +448,7 @@ function App() {
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0]
   const tagSummaries = getTagSummaries(notes)
+  const shlokaTagSummaries = getShlokaTagSummaries(shlokas)
   const tagSuggestionItems: TagSuggestionItem[] = tagSummaries.map((tag) => ({
     id: tag.id,
     label: tag.label,
@@ -469,6 +496,39 @@ function App() {
 
   const hasNoTagMatches = Boolean(normalizedSearch) && !tagSearchSuggestions.length
   const shouldShowSuggestionList = Boolean(normalizedSearch)
+  const normalizedShlokaSearch = normalizeTag(shlokaSearch)
+  const shlokaSearchTerm = shlokaSearch.trim().replace(/^#+/, '').toLowerCase()
+  const visibleShlokaTags = shlokaTagSummaries
+    .filter((tag) => {
+      if (!normalizedShlokaSearch) {
+        return true
+      }
+
+      return (
+        tag.id.includes(normalizedShlokaSearch) ||
+        tag.label.toLowerCase().includes(shlokaSearchTerm)
+      )
+    })
+    .sort((left, right) => left.label.localeCompare(right.label))
+  const shlokaSearchSuggestions = visibleShlokaTags.slice(0, 8)
+  const activeShlokaTagId = shlokaTagSummaries.some((tag) => tag.id === selectedShlokaTagId)
+    ? selectedShlokaTagId
+    : ''
+  const effectiveShlokaTagId = activeShlokaTagId || shlokaSearchSuggestions[0]?.id || ''
+  const filteredShlokas = shlokas
+    .filter((shloka) => {
+      const tagMatches = effectiveShlokaTagId ? shloka.tags.includes(effectiveShlokaTagId) : true
+      const textMatches = normalizedShlokaSearch
+        ? matchesShlokaSearch(shloka, shlokaSearchTerm)
+        : true
+
+      return tagMatches && textMatches
+    })
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  const memorizedShlokas = filteredShlokas.filter((shloka) => shloka.status === 'memorized')
+  const memorizingShlokas = filteredShlokas.filter((shloka) => shloka.status === 'memorizing')
+  const hasNoShlokaTagMatches =
+    Boolean(normalizedShlokaSearch) && !shlokaSearchSuggestions.length && !filteredShlokas.length
 
   function updateCurrentNote(patch: Partial<Pick<Note, 'title' | 'content'>>) {
     setSaveState('saving')
@@ -484,6 +544,85 @@ function App() {
           : note,
       ),
     )
+  }
+
+  function resetShlokaForm() {
+    setEditingShlokaId('')
+    setShlokaTitle('')
+    setShlokaReference('')
+    setShlokaText('')
+    setShlokaTagsInput('')
+    setShlokaStatus('memorizing')
+  }
+
+  function editShloka(shloka: Shloka) {
+    setEditingShlokaId(shloka.id)
+    setShlokaTitle(shloka.title)
+    setShlokaReference(shloka.reference)
+    setShlokaText(shloka.text)
+    setShlokaTagsInput(formatShlokaTags(shloka.tags))
+    setShlokaStatus(shloka.status)
+    setCurrentPage('shlokas')
+  }
+
+  function handleSaveShloka() {
+    const trimmedText = shlokaText.trim()
+    const trimmedTitle = shlokaTitle.trim()
+    const trimmedReference = shlokaReference.trim()
+    const nextTags = parseShlokaTags(shlokaTagsInput)
+
+    if (!trimmedTitle || !trimmedText) {
+      return
+    }
+
+    const now = new Date().toISOString()
+
+    if (editingShlokaId) {
+      setShlokas((currentShlokas) =>
+        currentShlokas.map((shloka) =>
+          shloka.id === editingShlokaId
+            ? {
+                ...shloka,
+                title: trimmedTitle,
+                reference: trimmedReference,
+                text: trimmedText,
+                tags: nextTags,
+                status: shlokaStatus,
+                updatedAt: now,
+              }
+            : shloka,
+        ),
+      )
+    } else {
+      const newShloka = createShloka()
+      setShlokas((currentShlokas) => [
+        {
+          ...newShloka,
+          title: trimmedTitle,
+          reference: trimmedReference,
+          text: trimmedText,
+          tags: nextTags,
+          status: shlokaStatus,
+          updatedAt: now,
+        },
+        ...currentShlokas,
+      ])
+    }
+
+    resetShlokaForm()
+  }
+
+  function handleDeleteShloka(shlokaId: string) {
+    setShlokas((currentShlokas) => currentShlokas.filter((shloka) => shloka.id !== shlokaId))
+
+    if (editingShlokaId === shlokaId) {
+      resetShlokaForm()
+    }
+  }
+
+  function handleShlokaTagSelection(tagId: string) {
+    setSelectedShlokaTagId(tagId)
+    setShlokaSearch(tagId)
   }
 
   function handleCreateNote() {
@@ -571,6 +710,9 @@ function App() {
               <button className="workspace-nav-link" type="button">
                 <span>Tag Search</span>
               </button>
+              <button className="workspace-nav-link" type="button">
+                <span>Shlokas</span>
+              </button>
               <span className={`workspace-save-state ${saveState}`}>{saveMessage}</span>
             </nav>
 
@@ -615,6 +757,13 @@ function App() {
               type="button"
             >
               <span>Tag Search</span>
+            </button>
+            <button
+              className={`workspace-nav-link${currentPage === 'shlokas' ? ' active' : ''}`}
+              onClick={() => setCurrentPage('shlokas')}
+              type="button"
+            >
+              <span>Shlokas</span>
             </button>
             <span className={`workspace-save-state ${saveState}`}>{saveMessage}</span>
           </nav>
@@ -775,6 +924,187 @@ function App() {
                       ))}
                     </div>
                   ) : null}
+                </section>
+              </div>
+            </section>
+          ) : null}
+
+          {currentPage === 'shlokas' ? (
+            <section className="workspace-page">
+              <div className="page-shell shloka-layout">
+                <section className="sidebar-panel page-panel shloka-form-panel">
+                  <div className="panel-heading">
+                    <h2>{editingShlokaId ? 'Edit shloka' : 'Shloka repository'}</h2>
+                    <div className="panel-heading-actions">
+                      <span>{shlokas.length}</span>
+                      <button className="ghost-button" onClick={resetShlokaForm} type="button">
+                        New
+                      </button>
+                    </div>
+                  </div>
+
+                  <label className="field-stack">
+                    <span>Theme or title</span>
+                    <input
+                      className="shloka-input"
+                      onChange={(event) => setShlokaTitle(event.target.value)}
+                      placeholder="Mercifulness, BG 9.22, Compassion set…"
+                      type="text"
+                      value={shlokaTitle}
+                    />
+                  </label>
+
+                  <label className="field-stack">
+                    <span>Reference</span>
+                    <input
+                      className="shloka-input"
+                      onChange={(event) => setShlokaReference(event.target.value)}
+                      placeholder="BG 9.22"
+                      type="text"
+                      value={shlokaReference}
+                    />
+                  </label>
+
+                  <label className="field-stack">
+                    <span>Shloka text</span>
+                    <textarea
+                      className="shloka-textarea"
+                      onChange={(event) => setShlokaText(event.target.value)}
+                      placeholder="Paste the full shloka or lecture-ready excerpt here."
+                      rows={8}
+                      value={shlokaText}
+                    />
+                  </label>
+
+                  <label className="field-stack">
+                    <span>Whole-shloka tags</span>
+                    <input
+                      className="shloka-input"
+                      onChange={(event) => setShlokaTagsInput(event.target.value)}
+                      placeholder="#mercifulness #compassion #bhagavad-gita"
+                      type="text"
+                      value={shlokaTagsInput}
+                    />
+                  </label>
+
+                  <label className="field-stack">
+                    <span>Memory basket</span>
+                    <select
+                      className="toolbar-select shloka-select"
+                      onChange={(event) => setShlokaStatus(event.target.value as ShlokaStatus)}
+                      value={shlokaStatus}
+                    >
+                      <option value="memorizing">Memorizing</option>
+                      <option value="memorized">Memorized</option>
+                    </select>
+                  </label>
+
+                  <div className="shloka-form-actions">
+                    <button className="primary-button" onClick={handleSaveShloka} type="button">
+                      {editingShlokaId ? 'Update shloka' : 'Save shloka'}
+                    </button>
+                    {editingShlokaId ? (
+                      <button className="ghost-button" onClick={resetShlokaForm} type="button">
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="sidebar-panel page-panel">
+                  <div className="panel-heading">
+                    <h2>Browse by tag</h2>
+                    <span>{filteredShlokas.length} shown</span>
+                  </div>
+
+                  <label className="search-input">
+                    <span>#</span>
+                    <input
+                      onChange={(event) => {
+                        setShlokaSearch(event.target.value)
+                        setSelectedShlokaTagId('')
+                      }}
+                      placeholder="Search shlokas or tags"
+                      type="text"
+                      value={shlokaSearch}
+                    />
+                  </label>
+
+                  {Boolean(normalizedShlokaSearch) && shlokaSearchSuggestions.length ? (
+                    <div className="search-suggestion-list" role="listbox" aria-label="Shloka tag suggestions">
+                      {shlokaSearchSuggestions.map((tag) => (
+                        <button
+                          key={tag.id}
+                          className={`search-suggestion-item${effectiveShlokaTagId === tag.id ? ' active' : ''}`}
+                          onClick={() => handleShlokaTagSelection(tag.id)}
+                          type="button"
+                        >
+                          <strong>#{tag.label}</strong>
+                          <span>{tag.count} shlokas</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {hasNoShlokaTagMatches ? (
+                    <div className="search-empty-state">No saved shloka tags match this search.</div>
+                  ) : null}
+
+                  <div className="tag-list">
+                    {visibleShlokaTags.map((tag) => (
+                      <button
+                        key={tag.id}
+                        className={`tag-row${effectiveShlokaTagId === tag.id ? ' active' : ''}`}
+                        onClick={() => handleShlokaTagSelection(tag.id)}
+                        type="button"
+                      >
+                        <span>#{tag.label}</span>
+                        <small>{tag.count}</small>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="shloka-baskets">
+                    <div className="tag-results">
+                      <div className="tag-results-header">
+                        <strong>Memorizing</strong>
+                        <span>{memorizingShlokas.length}</span>
+                      </div>
+                      {memorizingShlokas.length ? (
+                        memorizingShlokas.map((shloka) => (
+                          <ShlokaCard
+                            key={shloka.id}
+                            onDelete={handleDeleteShloka}
+                            onEdit={editShloka}
+                            onTagClick={handleShlokaTagSelection}
+                            shloka={shloka}
+                          />
+                        ))
+                      ) : (
+                        <div className="search-empty-state">No shlokas in the memorizing basket.</div>
+                      )}
+                    </div>
+
+                    <div className="tag-results">
+                      <div className="tag-results-header">
+                        <strong>Memorized</strong>
+                        <span>{memorizedShlokas.length}</span>
+                      </div>
+                      {memorizedShlokas.length ? (
+                        memorizedShlokas.map((shloka) => (
+                          <ShlokaCard
+                            key={shloka.id}
+                            onDelete={handleDeleteShloka}
+                            onEdit={editShloka}
+                            onTagClick={handleShlokaTagSelection}
+                            shloka={shloka}
+                          />
+                        ))
+                      ) : (
+                        <div className="search-empty-state">No shlokas in the memorized basket.</div>
+                      )}
+                    </div>
+                  </div>
                 </section>
               </div>
             </section>
@@ -1274,6 +1604,47 @@ function EditorPanel({
         </div>
       </section>
     </section>
+  )
+}
+
+type ShlokaCardProps = {
+  shloka: Shloka
+  onEdit: (shloka: Shloka) => void
+  onDelete: (shlokaId: string) => void
+  onTagClick: (tagId: string) => void
+}
+
+function ShlokaCard({ shloka, onEdit, onDelete, onTagClick }: ShlokaCardProps) {
+  return (
+    <article className="result-card shloka-card">
+      <div className="note-card-row">
+        <strong>{shloka.title || shloka.reference || 'Untitled shloka'}</strong>
+        <div className="shloka-card-actions">
+          <button className="ghost-button" onClick={() => onEdit(shloka)} type="button">
+            Edit
+          </button>
+          <button className="ghost-button" onClick={() => onDelete(shloka.id)} type="button">
+            Delete
+          </button>
+        </div>
+      </div>
+      {shloka.reference ? <span className="shloka-reference">{shloka.reference}</span> : null}
+      <p>{shloka.text}</p>
+      {shloka.tags.length ? (
+        <div className="shloka-tag-group">
+          {shloka.tags.map((tag) => (
+            <button
+              key={`${shloka.id}-${tag}`}
+              className="shloka-tag-chip"
+              onClick={() => onTagClick(tag)}
+              type="button"
+            >
+              #{tag}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </article>
   )
 }
 
