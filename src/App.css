@@ -252,7 +252,6 @@
   align-self: start;
 }
 
-.shloka-input,
 .shloka-textarea {
   width: 100%;
   border: 1px solid #dde3eb;
@@ -260,11 +259,6 @@
   background: #fff;
   color: var(--ink);
   font: inherit;
-}
-
-.shloka-input {
-  min-height: 42px;
-  padding: 0.7rem 0.82rem;
 }
 
 .shloka-textarea {
@@ -292,13 +286,6 @@
 
 .shloka-card {
   gap: 8px;
-}
-
-.shloka-reference {
-  display: inline-block;
-  margin-top: 4px;
-  font-size: 0.75rem;
-  color: #6b7280;
 }
 
 .shloka-tag-group {

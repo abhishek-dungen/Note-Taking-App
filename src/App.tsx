@@ -111,8 +111,6 @@ function App() {
   const [shlokaSearch, setShlokaSearch] = useState('')
   const [selectedShlokaTagId, setSelectedShlokaTagId] = useState('')
   const [editingShlokaId, setEditingShlokaId] = useState('')
-  const [shlokaTitle, setShlokaTitle] = useState('')
-  const [shlokaReference, setShlokaReference] = useState('')
   const [shlokaText, setShlokaText] = useState('')
   const [shlokaTagsInput, setShlokaTagsInput] = useState('')
   const [shlokaStatus, setShlokaStatus] = useState<ShlokaStatus>('memorizing')
@@ -548,8 +546,6 @@ function App() {
 
   function resetShlokaForm() {
     setEditingShlokaId('')
-    setShlokaTitle('')
-    setShlokaReference('')
     setShlokaText('')
     setShlokaTagsInput('')
     setShlokaStatus('memorizing')
@@ -557,8 +553,6 @@ function App() {
 
   function editShloka(shloka: Shloka) {
     setEditingShlokaId(shloka.id)
-    setShlokaTitle(shloka.title)
-    setShlokaReference(shloka.reference)
     setShlokaText(shloka.text)
     setShlokaTagsInput(formatShlokaTags(shloka.tags))
     setShlokaStatus(shloka.status)
@@ -567,11 +561,9 @@ function App() {
 
   function handleSaveShloka() {
     const trimmedText = shlokaText.trim()
-    const trimmedTitle = shlokaTitle.trim()
-    const trimmedReference = shlokaReference.trim()
     const nextTags = parseShlokaTags(shlokaTagsInput)
 
-    if (!trimmedTitle || !trimmedText) {
+    if (!trimmedText) {
       return
     }
 
@@ -583,8 +575,8 @@ function App() {
           shloka.id === editingShlokaId
             ? {
                 ...shloka,
-                title: trimmedTitle,
-                reference: trimmedReference,
+                title: '',
+                reference: '',
                 text: trimmedText,
                 tags: nextTags,
                 status: shlokaStatus,
@@ -598,8 +590,8 @@ function App() {
       setShlokas((currentShlokas) => [
         {
           ...newShloka,
-          title: trimmedTitle,
-          reference: trimmedReference,
+          title: '',
+          reference: '',
           text: trimmedText,
           tags: nextTags,
           status: shlokaStatus,
@@ -942,28 +934,6 @@ function App() {
                       </button>
                     </div>
                   </div>
-
-                  <label className="field-stack">
-                    <span>Theme or title</span>
-                    <input
-                      className="shloka-input"
-                      onChange={(event) => setShlokaTitle(event.target.value)}
-                      placeholder="Mercifulness, BG 9.22, Compassion set…"
-                      type="text"
-                      value={shlokaTitle}
-                    />
-                  </label>
-
-                  <label className="field-stack">
-                    <span>Reference</span>
-                    <input
-                      className="shloka-input"
-                      onChange={(event) => setShlokaReference(event.target.value)}
-                      placeholder="BG 9.22"
-                      type="text"
-                      value={shlokaReference}
-                    />
-                  </label>
 
                   <label className="field-stack">
                     <span>Shloka text</span>
@@ -1615,10 +1585,17 @@ type ShlokaCardProps = {
 }
 
 function ShlokaCard({ shloka, onEdit, onDelete, onTagClick }: ShlokaCardProps) {
+  const previewTitle =
+    shloka.text
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.slice(0, 72) ?? 'Untitled shloka'
+
   return (
     <article className="result-card shloka-card">
       <div className="note-card-row">
-        <strong>{shloka.title || shloka.reference || 'Untitled shloka'}</strong>
+        <strong>{previewTitle}</strong>
         <div className="shloka-card-actions">
           <button className="ghost-button" onClick={() => onEdit(shloka)} type="button">
             Edit
@@ -1628,7 +1605,6 @@ function ShlokaCard({ shloka, onEdit, onDelete, onTagClick }: ShlokaCardProps) {
           </button>
         </div>
       </div>
-      {shloka.reference ? <span className="shloka-reference">{shloka.reference}</span> : null}
       <p>{shloka.text}</p>
       {shloka.tags.length ? (
         <div className="shloka-tag-group">
