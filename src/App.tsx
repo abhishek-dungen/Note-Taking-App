@@ -36,8 +36,10 @@ import {
   getTagSummaries,
   loadNotes,
   loadSyncBuffer,
+  parseStoredNotes,
   saveNotes,
   saveSyncBuffer,
+  STORAGE_KEY,
   type Note,
   type TagResult,
 } from './lib/notes'
@@ -47,8 +49,10 @@ import {
   getShlokaTagSummaries,
   loadShlokas,
   matchesShlokaSearch,
+  parseStoredShlokas,
   parseShlokaTags,
   saveShlokas,
+  SHLOKAS_STORAGE_KEY,
   type Shloka,
   type ShlokaStatus,
 } from './lib/shlokas'
@@ -108,6 +112,16 @@ function getOnlineStatus() {
   return typeof navigator === 'undefined' ? true : navigator.onLine
 }
 
+function hasLegacyLocalData() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const legacyNotes = parseStoredNotes(window.localStorage.getItem(STORAGE_KEY))
+  const legacyShlokas = parseStoredShlokas(window.localStorage.getItem(SHLOKAS_STORAGE_KEY))
+  return Boolean(legacyNotes?.length || legacyShlokas?.length)
+}
+
 function App() {
   const [notes, setNotes] = useState<Note[]>([])
   const [shlokas, setShlokas] = useState<Shloka[]>([])
@@ -130,6 +144,8 @@ function App() {
   const [authMessage, setAuthMessage] = useState('Sign in to keep your notes and shlokas tied to your account.')
   const [isAuthBusy, setIsAuthBusy] = useState(false)
   const [isAuthReady, setIsAuthReady] = useState(false)
+  const [isImportingLegacyData, setIsImportingLegacyData] = useState(false)
+  const [hasLegacyImport, setHasLegacyImport] = useState(hasLegacyLocalData)
   const [cloudUserId, setCloudUserId] = useState('')
   const [isCloudReady, setIsCloudReady] = useState(false)
   const [isOnline, setIsOnline] = useState(getOnlineStatus)
@@ -745,6 +761,31 @@ function App() {
     setAuthMessage('Signed out. Sign in to access your notes and shlokas.')
   }
 
+  function handleImportLegacyData() {
+    if (typeof window === 'undefined' || !cloudUserId) {
+      return
+    }
+
+    const legacyNotes = parseStoredNotes(window.localStorage.getItem(STORAGE_KEY)) ?? []
+    const legacyShlokas = parseStoredShlokas(window.localStorage.getItem(SHLOKAS_STORAGE_KEY)) ?? []
+
+    if (!legacyNotes.length && !legacyShlokas.length) {
+      setHasLegacyImport(hasLegacyLocalData())
+      setSaveMessage('No old local data was found to import.')
+      return
+    }
+
+    setIsImportingLegacyData(true)
+    applyLocalData(legacyNotes.length ? legacyNotes : notesRef.current, legacyShlokas, {
+      queueCloudSync: true,
+      message: 'Importing your older local data into this account…',
+    })
+    window.localStorage.removeItem(STORAGE_KEY)
+    window.localStorage.removeItem(SHLOKAS_STORAGE_KEY)
+    setHasLegacyImport(false)
+    setIsImportingLegacyData(false)
+  }
+
   function updateCurrentNote(patch: Partial<Pick<Note, 'title' | 'content'>>) {
     setSaveState('saving')
     setSaveMessage('Syncing to Supabase…')
@@ -970,6 +1011,12 @@ function App() {
                     {authMode === 'signin' ? 'Need an account?' : 'Already have an account?'}
                   </button>
                 </div>
+                {hasLegacyImport ? (
+                  <div className="search-empty-state">
+                    Older browser-only notes were found on this device. Sign in first, then use
+                    the import banner to copy them into your account.
+                  </div>
+                ) : null}
               </section>
             </div>
           </section>
@@ -1056,6 +1103,25 @@ function App() {
             </button>
             <span className={`workspace-save-state ${saveState}`}>{saveMessage}</span>
           </nav>
+
+          {hasLegacyImport ? (
+            <div className="legacy-import-bar">
+              <div className="tag-jump-copy">
+                <strong>Legacy local data found</strong>
+                <span>Import older browser-only notes and shlokas into this signed-in account.</span>
+              </div>
+              <div className="tag-jump-actions">
+                <button
+                  className="primary-button"
+                  disabled={isImportingLegacyData}
+                  onClick={handleImportLegacyData}
+                  type="button"
+                >
+                  {isImportingLegacyData ? 'Importing…' : 'Import now'}
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {currentPage === 'editor' ? (
             <EditorPanel

@@ -552,6 +552,20 @@
   backdrop-filter: blur(8px);
 }
 
+.legacy-import-bar {
+  position: sticky;
+  top: 41px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #d9e6cf;
+  background: rgba(240, 248, 233, 0.96);
+  backdrop-filter: blur(8px);
+}
+
 .tag-jump-copy {
   display: flex;
   align-items: center;
