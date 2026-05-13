@@ -25,7 +25,7 @@ type TagSummary = {
   count: number
 }
 
-type TagResult = {
+export type TagResult = {
   noteId: string
   noteTitle: string
   tagId: string
@@ -33,6 +33,10 @@ type TagResult = {
   snippet: string
   updatedAt: string
   occurrenceIndex: number
+  location: 'title' | 'content'
+  contentOccurrenceIndex?: number
+  titleRangeStart?: number
+  titleRangeEnd?: number
 }
 
 export const STORAGE_KEY = 'quiet-notes::notes'
@@ -173,6 +177,8 @@ type FlatMention = {
   end: number
 }
 
+const TITLE_TAG_PATTERN = /(^|\s)#([^\s#]+)/g
+
 function flattenNode(node?: JSONContent): { text: string; mentions: FlatMention[] } {
   if (!node) {
     return { text: '', mentions: [] }
@@ -252,6 +258,32 @@ function createSnippet(text: string, start: number, end: number) {
   return `${snippetStart > 0 ? '…' : ''}${compact}${snippetEnd < text.length ? '…' : ''}`
 }
 
+function extractTitleMentions(title: string): FlatMention[] {
+  const mentions: FlatMention[] = []
+
+  for (const match of title.matchAll(TITLE_TAG_PATTERN)) {
+    const prefix = match[1] ?? ''
+    const rawLabel = match[2] ?? ''
+    const id = normalizeTag(rawLabel)
+
+    if (!id) {
+      continue
+    }
+
+    const start = (match.index ?? 0) + prefix.length
+    const end = start + rawLabel.length + 1
+
+    mentions.push({
+      id,
+      label: rawLabel,
+      start,
+      end,
+    })
+  }
+
+  return mentions
+}
+
 export function extractNotePreview(content: JSONContent) {
   const preview = collectBlocks(content)
     .map((block) => block.text.trim())
@@ -268,6 +300,20 @@ export function getTagSummaries(notes: Note[]): TagSummary[] {
   const tagMap = new Map<string, TagSummary>()
 
   notes.forEach((note) => {
+    extractTitleMentions(note.title).forEach((mention) => {
+      const existing = tagMap.get(mention.id)
+      if (existing) {
+        existing.count += 1
+        return
+      }
+
+      tagMap.set(mention.id, {
+        id: mention.id,
+        label: mention.label,
+        count: 1,
+      })
+    })
+
     const blocks = collectBlocks(note.content)
 
     blocks.forEach((block) => {
@@ -293,31 +339,55 @@ export function getTagSummaries(notes: Note[]): TagSummary[] {
 export function findTagResults(notes: Note[], tagId: string): TagResult[] {
   return notes
     .flatMap((note) => {
+      const titleMentions = extractTitleMentions(note.title)
       const blocks = collectBlocks(note.content)
-      const occurrenceCounter = new Map<string, number>()
+      const results: TagResult[] = []
+      let noteOccurrence = 0
+      let contentOccurrence = 0
 
-      return blocks.flatMap((block) =>
-        block.mentions.flatMap((mention) => {
-          const nextOccurrence = (occurrenceCounter.get(mention.id) ?? 0) + 1
-          occurrenceCounter.set(mention.id, nextOccurrence)
+      titleMentions.forEach((mention) => {
+        if (mention.id !== tagId) {
+          return
+        }
 
+        noteOccurrence += 1
+        results.push({
+          noteId: note.id,
+          noteTitle: note.title || 'Untitled note',
+          tagId: mention.id,
+          tagLabel: mention.label,
+          snippet: createSnippet(note.title, mention.start, mention.end),
+          updatedAt: note.updatedAt,
+          occurrenceIndex: noteOccurrence,
+          location: 'title',
+          titleRangeStart: mention.start,
+          titleRangeEnd: mention.end,
+        })
+      })
+
+      blocks.forEach((block) => {
+        block.mentions.forEach((mention) => {
           if (mention.id !== tagId) {
-            return []
+            return
           }
 
-          return [
-            {
-              noteId: note.id,
-              noteTitle: note.title || 'Untitled note',
-              tagId: mention.id,
-              tagLabel: mention.label,
-              snippet: createSnippet(block.text, mention.start, mention.end),
-              updatedAt: note.updatedAt,
-              occurrenceIndex: nextOccurrence,
-            },
-          ]
-        }),
-      )
+          noteOccurrence += 1
+          contentOccurrence += 1
+          results.push({
+            noteId: note.id,
+            noteTitle: note.title || 'Untitled note',
+            tagId: mention.id,
+            tagLabel: mention.label,
+            snippet: createSnippet(block.text, mention.start, mention.end),
+            updatedAt: note.updatedAt,
+            occurrenceIndex: noteOccurrence,
+            location: 'content',
+            contentOccurrenceIndex: contentOccurrence,
+          })
+        })
+      })
+
+      return results
     })
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }

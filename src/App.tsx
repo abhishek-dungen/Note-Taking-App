@@ -37,6 +37,7 @@ import {
   loadSyncBuffer,
   saveSyncBuffer,
   type Note,
+  type TagResult,
 } from './lib/notes'
 import {
   ensureSupabaseUser,
@@ -51,6 +52,10 @@ type PendingTagFocus = {
   noteId: string
   tagId: string
   occurrenceIndex: number
+  location: TagResult['location']
+  contentOccurrenceIndex?: number
+  titleRangeStart?: number
+  titleRangeEnd?: number
   requestId: number
 }
 
@@ -458,14 +463,8 @@ function App() {
   const pendingTagLabel = pendingTagFocus
     ? tagSummaries.find((tag) => tag.id === pendingTagFocus.tagId)?.label ?? pendingTagFocus.tagId
     : ''
-  const activeNoteTagResults =
-    pendingTagFocus && pendingTagFocus.noteId === activeNote?.id
-      ? findTagResults([activeNote], pendingTagFocus.tagId)
-      : []
-  const activeNoteTagPosition = pendingTagFocus
-    ? activeNoteTagResults.findIndex(
-        (result) => result.occurrenceIndex === pendingTagFocus.occurrenceIndex,
-      )
+  const activeTagResultPosition = pendingTagFocus
+    ? activeTagResults.findIndex((result) => isMatchingTagResult(result, pendingTagFocus))
     : -1
 
   const hasNoTagMatches = Boolean(normalizedSearch) && !tagSearchSuggestions.length
@@ -538,27 +537,23 @@ function App() {
   }
 
   function jumpToTagOccurrence(direction: 'previous' | 'next') {
-    if (!pendingTagFocus || !activeNoteTagResults.length) {
+    if (!pendingTagFocus || !activeTagResults.length) {
       return
     }
 
-    const currentIndex = activeNoteTagPosition >= 0 ? activeNoteTagPosition : 0
+    const currentIndex = activeTagResultPosition >= 0 ? activeTagResultPosition : 0
     const nextIndex =
       direction === 'next'
-        ? (currentIndex + 1) % activeNoteTagResults.length
-        : (currentIndex + activeNoteTagResults.length - 1) % activeNoteTagResults.length
-    const nextOccurrence = activeNoteTagResults[nextIndex]
+        ? (currentIndex + 1) % activeTagResults.length
+        : (currentIndex + activeTagResults.length - 1) % activeTagResults.length
+    const nextOccurrence = activeTagResults[nextIndex]
 
     if (!nextOccurrence) {
       return
     }
 
-    setPendingTagFocus({
-      noteId: nextOccurrence.noteId,
-      tagId: nextOccurrence.tagId,
-      occurrenceIndex: nextOccurrence.occurrenceIndex,
-      requestId: Date.now(),
-    })
+    setActiveNoteId(nextOccurrence.noteId)
+    setPendingTagFocus(createPendingTagFocus(nextOccurrence))
   }
 
   if (!isCloudReady || !activeNote) {
@@ -633,8 +628,8 @@ function App() {
               onJumpToNext={() => jumpToTagOccurrence('next')}
               onJumpToPrevious={() => jumpToTagOccurrence('previous')}
               tagJumpLabel={pendingTagLabel}
-              tagJumpPosition={activeNoteTagPosition >= 0 ? activeNoteTagPosition + 1 : 0}
-              tagJumpTotal={activeNoteTagResults.length}
+              tagJumpPosition={activeTagResultPosition >= 0 ? activeTagResultPosition + 1 : 0}
+              tagJumpTotal={activeTagResults.length}
               tagSuggestions={tagSuggestionItems}
             />
           ) : null}
@@ -768,12 +763,7 @@ function App() {
                           className="result-card"
                           onClick={() => {
                             setActiveNoteId(result.noteId)
-                            setPendingTagFocus({
-                              noteId: result.noteId,
-                              tagId: result.tagId,
-                              occurrenceIndex: result.occurrenceIndex,
-                              requestId: Date.now(),
-                            })
+                            setPendingTagFocus(createPendingTagFocus(result))
                             setCurrentPage('editor')
                           }}
                           type="button"
@@ -822,6 +812,9 @@ function EditorPanel({
 }: EditorPanelProps) {
   const activeNoteRef = useRef(note.id)
   const highlightedTagElementRef = useRef<HTMLElement | null>(null)
+  const titleInputRef = useRef<HTMLInputElement | null>(null)
+  const isTitleJumpTarget =
+    pendingTagFocus?.noteId === note.id && pendingTagFocus.location === 'title'
   const [tagSuggestionStore] = useState(() => ({
     items: tagSuggestions,
     getItems() {
@@ -893,6 +886,31 @@ function EditorPanel({
       return
     }
 
+    if (pendingTagFocus.location === 'title') {
+      clearHighlightedTag()
+      const titleInput = titleInputRef.current
+
+      if (titleInput) {
+        titleInput.focus()
+        if (
+          typeof pendingTagFocus.titleRangeStart === 'number' &&
+          typeof pendingTagFocus.titleRangeEnd === 'number'
+        ) {
+          titleInput.setSelectionRange(
+            pendingTagFocus.titleRangeStart,
+            pendingTagFocus.titleRangeEnd,
+          )
+        }
+        titleInput.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'nearest',
+        })
+      }
+
+      return
+    }
+
     let currentOccurrence = 0
     let selection: { from: number; to: number } | null = null
 
@@ -900,7 +918,7 @@ function EditorPanel({
       if (node.type.name === 'tag' && node.attrs.id === pendingTagFocus.tagId) {
         currentOccurrence += 1
 
-        if (currentOccurrence === pendingTagFocus.occurrenceIndex) {
+        if (currentOccurrence === pendingTagFocus.contentOccurrenceIndex) {
           selection = { from: position, to: position + node.nodeSize }
           return false
         }
@@ -918,7 +936,7 @@ function EditorPanel({
     const tagElements = Array.from(
       editor.view.dom.querySelectorAll(`.tag-token[data-tag-id="${pendingTagFocus.tagId}"]`),
     ) as HTMLElement[]
-    const targetElement = tagElements[pendingTagFocus.occurrenceIndex - 1]
+    const targetElement = tagElements[(pendingTagFocus.contentOccurrenceIndex ?? 1) - 1]
 
     if (targetElement) {
       targetElement.classList.add('is-jump-target')
@@ -1244,7 +1262,8 @@ function EditorPanel({
         <div className="document-stage">
           <article className="document-page">
             <input
-              className="note-title-input"
+              className={`note-title-input${isTitleJumpTarget ? ' is-jump-target' : ''}`}
+              ref={titleInputRef}
               onChange={(event) => onTitleChange(event.target.value)}
               placeholder="Untitled note"
               type="text"
@@ -1259,3 +1278,25 @@ function EditorPanel({
 }
 
 export default App
+
+function createPendingTagFocus(result: TagResult): PendingTagFocus {
+  return {
+    noteId: result.noteId,
+    tagId: result.tagId,
+    occurrenceIndex: result.occurrenceIndex,
+    location: result.location,
+    contentOccurrenceIndex: result.contentOccurrenceIndex,
+    titleRangeStart: result.titleRangeStart,
+    titleRangeEnd: result.titleRangeEnd,
+    requestId: Date.now(),
+  }
+}
+
+function isMatchingTagResult(result: TagResult, focus: PendingTagFocus) {
+  return (
+    result.noteId === focus.noteId &&
+    result.tagId === focus.tagId &&
+    result.occurrenceIndex === focus.occurrenceIndex &&
+    result.location === focus.location
+  )
+}
