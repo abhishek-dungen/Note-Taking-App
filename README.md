@@ -17,7 +17,9 @@ npm run build
 
 ## Supabase setup
 
-Run the SQL in `supabase/setup.sql` inside the Supabase SQL Editor, then enable Anonymous sign-ins in Supabase Auth.
+1. Run the SQL in `supabase/setup.sql` inside the Supabase SQL Editor.
+2. In Supabase Auth, enable Email provider for email/password sign-in.
+3. If email confirmation is enabled, add your deployed site URL to Auth redirect/site settings and confirm new accounts before first sign-in.
 
 ## GitHub Pages deployment
 

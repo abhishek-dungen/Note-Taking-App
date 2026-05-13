@@ -1,5 +1,7 @@
 import type { JSONContent } from '@tiptap/core'
 import { normalizeTag } from './tags'
+import type { Shloka } from './shlokas'
+import { parseStoredShlokas } from './shlokas'
 
 export type Note = {
   id: string
@@ -16,6 +18,7 @@ export type SaveNotesResult = {
 
 export type SyncBufferSnapshot = {
   notes: Note[]
+  shlokas: Shloka[]
   updatedAt: string
 }
 
@@ -41,6 +44,10 @@ export type TagResult = {
 
 export const STORAGE_KEY = 'quiet-notes::notes'
 export const SYNC_BUFFER_KEY = 'quiet-notes::sync-buffer'
+
+function getScopedStorageKey(baseKey: string, scope?: string) {
+  return scope ? `${baseKey}::${scope}` : baseKey
+}
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: 'doc',
@@ -96,11 +103,11 @@ export function parseStoredNotes(raw: string | null): Note[] | null {
   }
 }
 
-export function loadNotes(): Note[] {
+export function loadNotes(scope?: string): Note[] {
   const fallback = [createNote()]
 
   try {
-    const parsed = parseStoredNotes(window.localStorage.getItem(STORAGE_KEY))
+    const parsed = parseStoredNotes(window.localStorage.getItem(getScopedStorageKey(STORAGE_KEY, scope)))
 
     if (!parsed) {
       return fallback
@@ -112,9 +119,9 @@ export function loadNotes(): Note[] {
   }
 }
 
-export function saveNotes(notes: Note[]): SaveNotesResult {
+export function saveNotes(notes: Note[], scope?: string): SaveNotesResult {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(notes))
+    window.localStorage.setItem(getScopedStorageKey(STORAGE_KEY, scope), JSON.stringify(notes))
     return { ok: true }
   } catch (error) {
     return {
@@ -124,9 +131,9 @@ export function saveNotes(notes: Note[]): SaveNotesResult {
   }
 }
 
-export function loadSyncBuffer(): SyncBufferSnapshot | null {
+export function loadSyncBuffer(scope?: string): SyncBufferSnapshot | null {
   try {
-    const raw = window.localStorage.getItem(SYNC_BUFFER_KEY)
+    const raw = window.localStorage.getItem(getScopedStorageKey(SYNC_BUFFER_KEY, scope))
 
     if (!raw) {
       return null
@@ -139,8 +146,11 @@ export function loadSyncBuffer(): SyncBufferSnapshot | null {
       return null
     }
 
+    const shlokas = parseStoredShlokas(JSON.stringify(parsed.shlokas ?? null)) ?? []
+
     return {
       notes,
+      shlokas,
       updatedAt:
         typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
     }
@@ -149,9 +159,9 @@ export function loadSyncBuffer(): SyncBufferSnapshot | null {
   }
 }
 
-export function saveSyncBuffer(snapshot: SyncBufferSnapshot): SaveNotesResult {
+export function saveSyncBuffer(snapshot: SyncBufferSnapshot, scope?: string): SaveNotesResult {
   try {
-    window.localStorage.setItem(SYNC_BUFFER_KEY, JSON.stringify(snapshot))
+    window.localStorage.setItem(getScopedStorageKey(SYNC_BUFFER_KEY, scope), JSON.stringify(snapshot))
     return { ok: true }
   } catch (error) {
     return {
@@ -162,9 +172,9 @@ export function saveSyncBuffer(snapshot: SyncBufferSnapshot): SaveNotesResult {
   }
 }
 
-export function clearSyncBuffer(): void {
+export function clearSyncBuffer(scope?: string): void {
   try {
-    window.localStorage.removeItem(SYNC_BUFFER_KEY)
+    window.localStorage.removeItem(getScopedStorageKey(SYNC_BUFFER_KEY, scope))
   } catch {
     // Ignore buffer cleanup failures.
   }

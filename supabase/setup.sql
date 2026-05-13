@@ -10,8 +10,23 @@ create table if not exists public.notes (
   constraint notes_content_is_object check (jsonb_typeof(content) = 'object')
 );
 
+create table if not exists public.shlokas (
+  id uuid primary key,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  title text not null default '',
+  reference text not null default '',
+  text text not null default '',
+  tags text[] not null default '{}',
+  status text not null default 'memorizing' check (status in ('memorizing', 'memorized')),
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create index if not exists notes_user_updated_idx
   on public.notes (user_id, updated_at desc);
+
+create index if not exists shlokas_user_updated_idx
+  on public.shlokas (user_id, updated_at desc);
 
 create or replace function public.set_notes_updated_at()
 returns trigger
@@ -30,7 +45,15 @@ before update on public.notes
 for each row
 execute function public.set_notes_updated_at();
 
+drop trigger if exists set_shlokas_updated_at on public.shlokas;
+
+create trigger set_shlokas_updated_at
+before update on public.shlokas
+for each row
+execute function public.set_notes_updated_at();
+
 alter table public.notes enable row level security;
+alter table public.shlokas enable row level security;
 
 drop policy if exists "notes_select_own" on public.notes;
 create policy "notes_select_own"
@@ -61,6 +84,35 @@ for delete
 to authenticated
 using ((select auth.uid()) = user_id);
 
+drop policy if exists "shlokas_select_own" on public.shlokas;
+create policy "shlokas_select_own"
+on public.shlokas
+for select
+to authenticated
+using ((select auth.uid()) = user_id);
+
+drop policy if exists "shlokas_insert_own" on public.shlokas;
+create policy "shlokas_insert_own"
+on public.shlokas
+for insert
+to authenticated
+with check ((select auth.uid()) = user_id);
+
+drop policy if exists "shlokas_update_own" on public.shlokas;
+create policy "shlokas_update_own"
+on public.shlokas
+for update
+to authenticated
+using ((select auth.uid()) = user_id)
+with check ((select auth.uid()) = user_id);
+
+drop policy if exists "shlokas_delete_own" on public.shlokas;
+create policy "shlokas_delete_own"
+on public.shlokas
+for delete
+to authenticated
+using ((select auth.uid()) = user_id);
+
 do $$
 begin
   if not exists (
@@ -71,6 +123,16 @@ begin
       and tablename = 'notes'
   ) then
     alter publication supabase_realtime add table public.notes;
+  end if;
+
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'shlokas'
+  ) then
+    alter publication supabase_realtime add table public.shlokas;
   end if;
 end
 $$;

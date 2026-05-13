@@ -23,6 +23,10 @@ export const SHLOKAS_STORAGE_KEY = 'quiet-notes::shlokas'
 
 const TAG_PATTERN = /#([^\s#,]+)/g
 
+function getScopedStorageKey(baseKey: string, scope?: string) {
+  return scope ? `${baseKey}::${scope}` : baseKey
+}
+
 function normalizeShloka(shloka: Partial<Shloka>): Shloka {
   const now = new Date().toISOString()
 
@@ -62,17 +66,23 @@ export function parseStoredShlokas(raw: string | null): Shloka[] | null {
   }
 }
 
-export function loadShlokas(): Shloka[] {
+export function loadShlokas(scope?: string): Shloka[] {
   try {
-    return parseStoredShlokas(window.localStorage.getItem(SHLOKAS_STORAGE_KEY)) ?? []
+    return (
+      parseStoredShlokas(window.localStorage.getItem(getScopedStorageKey(SHLOKAS_STORAGE_KEY, scope))) ??
+      []
+    )
   } catch {
     return []
   }
 }
 
-export function saveShlokas(shlokas: Shloka[]) {
+export function saveShlokas(shlokas: Shloka[], scope?: string) {
   try {
-    window.localStorage.setItem(SHLOKAS_STORAGE_KEY, JSON.stringify(shlokas))
+    window.localStorage.setItem(
+      getScopedStorageKey(SHLOKAS_STORAGE_KEY, scope),
+      JSON.stringify(shlokas),
+    )
     return { ok: true as const }
   } catch (error) {
     return {

@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
-import type { RealtimeChannel, User } from '@supabase/supabase-js'
+import type { AuthChangeEvent, RealtimeChannel, Session, User } from '@supabase/supabase-js'
 import type { Note } from './notes'
+import type { Shloka } from './shlokas'
 
 const SUPABASE_URL = 'https://jrczanyuirjdfsqvuzyq.supabase.co'
 const SUPABASE_PUBLISHABLE_KEY =
@@ -19,14 +20,23 @@ export type CloudResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string }
 
-const ANONYMOUS_AUTH_DISABLED_MESSAGE =
-  'Anonymous sign-ins are disabled in this Supabase project. Enable them in Supabase Dashboard > Authentication > Sign In / Providers > Anonymous.'
-
 type NoteRecord = {
   id: string
   user_id: string
   title: string
   content: Note['content']
+  created_at: string
+  updated_at: string
+}
+
+type ShlokaRecord = {
+  id: string
+  user_id: string
+  title: string
+  reference: string
+  text: string
+  tags: string[]
+  status: Shloka['status']
   created_at: string
   updated_at: string
 }
@@ -52,35 +62,104 @@ function mapNoteToRecord(note: Note, userId: string): NoteRecord {
   }
 }
 
-export async function ensureSupabaseUser(): Promise<CloudResult<User>> {
+function mapRecordToShloka(record: ShlokaRecord): Shloka {
+  return {
+    id: record.id,
+    title: record.title,
+    reference: record.reference,
+    text: record.text,
+    tags: record.tags,
+    status: record.status,
+    createdAt: record.created_at,
+    updatedAt: record.updated_at,
+  }
+}
+
+function mapShlokaToRecord(shloka: Shloka, userId: string): ShlokaRecord {
+  return {
+    id: shloka.id,
+    user_id: userId,
+    title: shloka.title,
+    reference: shloka.reference,
+    text: shloka.text,
+    tags: shloka.tags,
+    status: shloka.status,
+    created_at: shloka.createdAt,
+    updated_at: shloka.updatedAt,
+  }
+}
+
+export async function getSupabaseUser(): Promise<CloudResult<User | null>> {
   const {
     data: { session },
-    error: sessionError,
+    error,
   } = await supabase.auth.getSession()
 
-  if (sessionError) {
-    return { ok: false, error: sessionError.message }
+  if (error) {
+    return { ok: false, error: error.message }
   }
 
-  if (session?.user) {
-    return { ok: true, data: session.user }
+  return { ok: true, data: session?.user ?? null }
+}
+
+export async function signUpWithPassword(
+  email: string,
+  password: string,
+): Promise<CloudResult<{ user: User | null; session: Session | null }>> {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  })
+
+  if (error) {
+    return { ok: false, error: error.message }
   }
 
-  const { data, error } = await supabase.auth.signInAnonymously()
+  return {
+    ok: true,
+    data: {
+      user: data.user ?? null,
+      session: data.session ?? null,
+    },
+  }
+}
+
+export async function signInWithPassword(
+  email: string,
+  password: string,
+): Promise<CloudResult<User>> {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
 
   if (error || !data.user) {
-    const message = error?.message ?? ''
-
-    return {
-      ok: false,
-      error:
-        message.includes('Anonymous sign-ins are disabled')
-          ? ANONYMOUS_AUTH_DISABLED_MESSAGE
-          : message || ANONYMOUS_AUTH_DISABLED_MESSAGE,
-    }
+    return { ok: false, error: error?.message ?? 'Unable to sign in.' }
   }
 
   return { ok: true, data: data.user }
+}
+
+export async function signOutSupabaseUser(): Promise<CloudResult<null>> {
+  const { error } = await supabase.auth.signOut()
+
+  if (error) {
+    return { ok: false, error: error.message }
+  }
+
+  return { ok: true, data: null }
+}
+
+export function subscribeToAuthStateChanges(
+  onChange: (event: AuthChangeEvent, session: Session | null) => void,
+) {
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange(onChange)
+
+  return () => {
+    subscription.unsubscribe()
+  }
 }
 
 export async function fetchCloudNotes(userId: string): Promise<CloudResult<Note[]>> {
@@ -97,6 +176,23 @@ export async function fetchCloudNotes(userId: string): Promise<CloudResult<Note[
   return {
     ok: true,
     data: (data as NoteRecord[]).map(mapRecordToNote),
+  }
+}
+
+export async function fetchCloudShlokas(userId: string): Promise<CloudResult<Shloka[]>> {
+  const { data, error } = await supabase
+    .from('shlokas')
+    .select('id, user_id, title, reference, text, tags, status, created_at, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+
+  if (error) {
+    return { ok: false, error: error.message }
+  }
+
+  return {
+    ok: true,
+    data: (data as ShlokaRecord[]).map(mapRecordToShloka),
   }
 }
 
@@ -143,6 +239,49 @@ export async function syncCloudNotes(
   return { ok: true, data: null }
 }
 
+export async function syncCloudShlokas(
+  userId: string,
+  shlokas: Shloka[],
+): Promise<CloudResult<null>> {
+  const payload = shlokas.map((shloka) => mapShlokaToRecord(shloka, userId))
+
+  const { error: upsertError } = await supabase
+    .from('shlokas')
+    .upsert(payload, { onConflict: 'id' })
+
+  if (upsertError) {
+    return { ok: false, error: upsertError.message }
+  }
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('shlokas')
+    .select('id')
+    .eq('user_id', userId)
+
+  if (existingError) {
+    return { ok: false, error: existingError.message }
+  }
+
+  const localIds = new Set(shlokas.map((shloka) => shloka.id))
+  const idsToDelete = (existingRows ?? [])
+    .map((row) => row.id as string)
+    .filter((id) => !localIds.has(id))
+
+  if (idsToDelete.length) {
+    const { error: deleteError } = await supabase
+      .from('shlokas')
+      .delete()
+      .eq('user_id', userId)
+      .in('id', idsToDelete)
+
+    if (deleteError) {
+      return { ok: false, error: deleteError.message }
+    }
+  }
+
+  return { ok: true, data: null }
+}
+
 export function subscribeToCloudNotes(
   userId: string,
   onChange: () => void,
@@ -155,6 +294,29 @@ export function subscribeToCloudNotes(
         event: '*',
         schema: 'public',
         table: 'notes',
+        filter: `user_id=eq.${userId}`,
+      },
+      () => onChange(),
+    )
+    .subscribe()
+
+  return () => {
+    void supabase.removeChannel(channel)
+  }
+}
+
+export function subscribeToCloudShlokas(
+  userId: string,
+  onChange: () => void,
+): () => void {
+  const channel: RealtimeChannel = supabase
+    .channel(`shlokas-sync-${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'shlokas',
         filter: `user_id=eq.${userId}`,
       },
       () => onChange(),

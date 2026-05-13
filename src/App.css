@@ -248,6 +248,14 @@
   gap: 18px;
 }
 
+.auth-shell {
+  width: min(100%, 440px);
+}
+
+.auth-panel {
+  gap: 14px;
+}
+
 .shloka-form-panel {
   align-self: start;
 }
@@ -267,6 +275,11 @@
   resize: vertical;
 }
 
+.auth-input {
+  min-height: 42px;
+  resize: none;
+}
+
 .shloka-select {
   width: 100%;
 }
@@ -274,13 +287,15 @@
 .shloka-form-actions,
 .shloka-card-actions,
 .shloka-tag-group,
-.shloka-baskets {
+.shloka-baskets,
+.auth-actions {
   display: flex;
   gap: 8px;
 }
 
 .shloka-form-actions,
-.shloka-baskets {
+.shloka-baskets,
+.auth-actions {
   flex-direction: column;
 }
 

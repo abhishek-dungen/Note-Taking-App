@@ -53,10 +53,17 @@ import {
   type ShlokaStatus,
 } from './lib/shlokas'
 import {
-  ensureSupabaseUser,
+  fetchCloudShlokas,
   fetchCloudNotes,
+  getSupabaseUser,
+  signInWithPassword,
+  signOutSupabaseUser,
+  signUpWithPassword,
+  subscribeToAuthStateChanges,
   subscribeToCloudNotes,
+  subscribeToCloudShlokas,
   syncCloudNotes,
+  syncCloudShlokas,
 } from './lib/supabase'
 import { normalizeTag } from './lib/tags'
 import './App.css'
@@ -102,12 +109,8 @@ function getOnlineStatus() {
 }
 
 function App() {
-  const [notes, setNotes] = useState<Note[]>(() =>
-    typeof window === 'undefined' ? [] : loadNotes(),
-  )
-  const [shlokas, setShlokas] = useState<Shloka[]>(() =>
-    typeof window === 'undefined' ? [] : loadShlokas(),
-  )
+  const [notes, setNotes] = useState<Note[]>([])
+  const [shlokas, setShlokas] = useState<Shloka[]>([])
   const [activeNoteId, setActiveNoteId] = useState('')
   const [currentPage, setCurrentPage] = useState<PageView>('editor')
   const [tagSearch, setTagSearch] = useState('')
@@ -121,10 +124,17 @@ function App() {
   const [pendingTagFocus, setPendingTagFocus] = useState<PendingTagFocus | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('sync')
   const [saveMessage, setSaveMessage] = useState('Connecting to Supabase…')
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authMessage, setAuthMessage] = useState('Sign in to keep your notes and shlokas tied to your account.')
+  const [isAuthBusy, setIsAuthBusy] = useState(false)
+  const [isAuthReady, setIsAuthReady] = useState(false)
   const [cloudUserId, setCloudUserId] = useState('')
   const [isCloudReady, setIsCloudReady] = useState(false)
   const [isOnline, setIsOnline] = useState(getOnlineStatus)
   const notesRef = useRef(notes)
+  const shlokasRef = useRef(shlokas)
   const hasPendingSaveRef = useRef(false)
   const cloudSyncTimeoutRef = useRef<number | null>(null)
   const retryTimeoutRef = useRef<number | null>(null)
@@ -138,16 +148,28 @@ function App() {
   }, [notes])
 
   useEffect(() => {
+    shlokasRef.current = shlokas
+  }, [shlokas])
+
+  useEffect(() => {
     cloudUserIdRef.current = cloudUserId
   }, [cloudUserId])
 
   useEffect(() => {
-    saveNotes(notes)
-  }, [notes])
+    if (!cloudUserId || !isCloudReady) {
+      return
+    }
+
+    saveNotes(notes, cloudUserId)
+  }, [cloudUserId, isCloudReady, notes])
 
   useEffect(() => {
-    saveShlokas(shlokas)
-  }, [shlokas])
+    if (!cloudUserId || !isCloudReady) {
+      return
+    }
+
+    saveShlokas(shlokas, cloudUserId)
+  }, [cloudUserId, isCloudReady, shlokas])
 
   const clearSyncTimers = useCallback(() => {
     if (cloudSyncTimeoutRef.current) {
@@ -161,11 +183,12 @@ function App() {
     }
   }, [])
 
-  const persistPendingBuffer = useCallback((nextNotes: Note[]) => {
+  const persistPendingBuffer = useCallback((nextNotes: Note[], nextShlokas: Shloka[]) => {
     const result = saveSyncBuffer({
       notes: nextNotes,
+      shlokas: nextShlokas,
       updatedAt: new Date().toISOString(),
-    })
+    }, cloudUserIdRef.current)
 
     if (!result.ok) {
       setSaveState('error')
@@ -176,34 +199,39 @@ function App() {
     return true
   }, [])
 
-  const applyLocalNotes = useCallback(
-    (nextNotes: Note[], options?: { queueCloudSync?: boolean; message?: string }) => {
+  const applyLocalData = useCallback(
+    (
+      nextNotes: Note[],
+      nextShlokas: Shloka[],
+      options?: { queueCloudSync?: boolean; message?: string },
+    ) => {
       setNotes(nextNotes)
+      setShlokas(nextShlokas)
       setActiveNoteId((currentActiveId) =>
         nextNotes.some((note) => note.id === currentActiveId) ? currentActiveId : nextNotes[0]?.id ?? '',
       )
 
       if (options?.queueCloudSync) {
         hasPendingSaveRef.current = true
-        persistPendingBuffer(nextNotes)
+        persistPendingBuffer(nextNotes, nextShlokas)
         setSaveState(getOnlineStatus() ? 'saving' : 'offline')
         setSaveMessage(
           options.message ??
             (getOnlineStatus()
-              ? 'Syncing local notes to Supabase…'
+              ? 'Syncing local data to Supabase…'
               : 'Offline. Changes are queued and will sync when you reconnect.'),
         )
         return
       }
 
       setSaveState('saved')
-      setSaveMessage('Loaded local notes.')
+      setSaveMessage('Loaded your account data.')
     },
     [persistPendingBuffer],
   )
 
   const flushPendingSync = useCallback(async () => {
-    if (!cloudUserIdRef.current || !notesRef.current.length || !getOnlineStatus()) {
+    if (!cloudUserIdRef.current || !getOnlineStatus()) {
       return
     }
 
@@ -212,12 +240,32 @@ function App() {
     }
 
     syncInFlightRef.current = true
-    const snapshot = notesRef.current
-    const syncResult = await syncCloudNotes(cloudUserIdRef.current, snapshot)
+    const notesSnapshot = notesRef.current
+    const shlokasSnapshot = shlokasRef.current
+    const notesResult = await syncCloudNotes(cloudUserIdRef.current, notesSnapshot)
+
+    if (!notesResult.ok) {
+      syncInFlightRef.current = false
+      hasPendingSaveRef.current = true
+      persistPendingBuffer(notesSnapshot, shlokasSnapshot)
+      setSaveState(getOnlineStatus() ? 'error' : 'offline')
+      setSaveMessage(
+        getOnlineStatus()
+          ? `Sync failed. Retrying… ${notesResult.error}`
+          : 'Offline. Changes are queued and will sync when you reconnect.',
+      )
+      clearSyncTimers()
+      retryTimeoutRef.current = window.setTimeout(() => {
+        void flushPendingSyncRef.current()
+      }, RETRY_DELAY_MS)
+      return
+    }
+
+    const shlokasResult = await syncCloudShlokas(cloudUserIdRef.current, shlokasSnapshot)
     syncInFlightRef.current = false
 
-    if (syncResult.ok) {
-      clearSyncBuffer()
+    if (shlokasResult.ok) {
+      clearSyncBuffer(cloudUserIdRef.current)
       hasPendingSaveRef.current = false
       setSaveState('saved')
       setSaveMessage('All changes saved to Supabase.')
@@ -225,11 +273,11 @@ function App() {
     }
 
     hasPendingSaveRef.current = true
-    persistPendingBuffer(snapshot)
+    persistPendingBuffer(notesSnapshot, shlokasSnapshot)
     setSaveState(getOnlineStatus() ? 'error' : 'offline')
     setSaveMessage(
       getOnlineStatus()
-        ? `Sync failed. Retrying… ${syncResult.error}`
+        ? `Sync failed. Retrying… ${shlokasResult.error}`
         : 'Offline. Changes are queued and will sync when you reconnect.',
     )
 
@@ -246,54 +294,69 @@ function App() {
   useEffect(() => {
     let isCancelled = false
 
-    async function initializeCloudSync() {
-      setSaveState('sync')
-      setSaveMessage('Connecting to Supabase…')
-
-      const pendingBuffer = loadSyncBuffer()
-      const localNotes = loadNotes()
-
-      const authResult = await ensureSupabaseUser()
+    async function hydrateAuth() {
+      const authResult = await getSupabaseUser()
 
       if (isCancelled) {
         return
       }
 
       if (!authResult.ok) {
-        if (pendingBuffer?.notes.length) {
-          applyLocalNotes(pendingBuffer.notes, {
-            queueCloudSync: true,
-            message: 'Supabase unavailable. Using queued local changes.',
-          })
-          setIsCloudReady(true)
-          return
-        }
-
-        if (localNotes.length) {
-          applyLocalNotes(localNotes)
-          setIsCloudReady(true)
-          setSaveState('error')
-          setSaveMessage(`Supabase unavailable: ${authResult.error}. Loaded local notes.`)
-          return
-        }
-
-        setSaveState('error')
-        setSaveMessage(`Supabase unavailable: ${authResult.error}`)
+        setAuthMessage(`Supabase unavailable: ${authResult.error}`)
+        setIsAuthReady(true)
         return
       }
 
-      const userId = authResult.data.id
-      setCloudUserId(userId)
+      setCloudUserId(authResult.data?.id ?? '')
+      setIsAuthReady(true)
+    }
 
-      const remoteResult = await fetchCloudNotes(userId)
+    void hydrateAuth()
+
+    const unsubscribe = subscribeToAuthStateChanges((_event, session) => {
+      setCloudUserId(session?.user?.id ?? '')
+      setIsCloudReady(false)
+      hasPendingSaveRef.current = false
+      clearSyncTimers()
+    })
+
+    return () => {
+      isCancelled = true
+      unsubscribe()
+      clearSyncTimers()
+    }
+  }, [clearSyncTimers])
+
+  useEffect(() => {
+    if (!cloudUserId) {
+      return
+    }
+
+    let isCancelled = false
+
+    async function initializeCloudSync() {
+      setSaveState('sync')
+      setSaveMessage('Connecting to Supabase…')
+
+      const pendingBuffer = loadSyncBuffer(cloudUserId)
+      const localNotes = loadNotes(cloudUserId)
+      const localShlokas = loadShlokas(cloudUserId)
+      const remoteNotesResult = await fetchCloudNotes(cloudUserId)
+      const remoteShlokasResult = await fetchCloudShlokas(cloudUserId)
+      const loadError =
+        !remoteNotesResult.ok
+          ? remoteNotesResult.error
+          : !remoteShlokasResult.ok
+            ? remoteShlokasResult.error
+            : ''
 
       if (isCancelled) {
         return
       }
 
-      if (!remoteResult.ok) {
-        if (pendingBuffer?.notes.length) {
-          applyLocalNotes(pendingBuffer.notes, {
+      if (!remoteNotesResult.ok || !remoteShlokasResult.ok) {
+        if (pendingBuffer) {
+          applyLocalData(pendingBuffer.notes, pendingBuffer.shlokas, {
             queueCloudSync: true,
             message: getOnlineStatus()
               ? 'Reconnecting and syncing queued changes…'
@@ -303,24 +366,24 @@ function App() {
           return
         }
 
-        if (localNotes.length) {
-          applyLocalNotes(localNotes)
-          setIsCloudReady(true)
+        if (localNotes.length || localShlokas.length) {
+          applyLocalData(localNotes, localShlokas)
           setSaveState('error')
-          setSaveMessage(`Supabase load failed: ${remoteResult.error}. Loaded local notes.`)
+          setSaveMessage(`Supabase load failed: ${loadError}. Loaded local data.`)
           setIsCloudReady(true)
           return
         }
 
         setSaveState('error')
-        setSaveMessage(`Supabase load failed: ${remoteResult.error}`)
+        setSaveMessage(`Supabase load failed: ${loadError}`)
         return
       }
 
-      const remoteNotes = remoteResult.data
+      const remoteNotes = remoteNotesResult.data
+      const remoteShlokas = remoteShlokasResult.data
 
-      if (pendingBuffer?.notes.length) {
-        applyLocalNotes(pendingBuffer.notes, {
+      if (pendingBuffer) {
+        applyLocalData(pendingBuffer.notes, pendingBuffer.shlokas, {
           queueCloudSync: true,
           message: getOnlineStatus()
             ? 'Syncing queued changes to Supabase…'
@@ -330,34 +393,37 @@ function App() {
         return
       }
 
-      if (!remoteNotes.length && localNotes.length) {
-        applyLocalNotes(localNotes, {
+      if ((!remoteNotes.length && localNotes.length) || (!remoteShlokas.length && localShlokas.length)) {
+        const mergedNotes = remoteNotes.length ? remoteNotes : localNotes
+        const mergedShlokas = remoteShlokas.length ? remoteShlokas : localShlokas
+
+        applyLocalData(mergedNotes, mergedShlokas, {
           queueCloudSync: true,
           message: getOnlineStatus()
-            ? 'Restoring your local notes to Supabase…'
-            : 'Offline. Local notes restored and queued for sync.',
+            ? 'Restoring your local data to Supabase…'
+            : 'Offline. Local data restored and queued for sync.',
         })
         setIsCloudReady(true)
         return
       }
 
-      if (!remoteNotes.length) {
-        const firstNote = createNote()
-        applyLocalNotes([firstNote], {
-          queueCloudSync: true,
-          message: getOnlineStatus()
-            ? 'Saving your first note to Supabase…'
-            : 'Offline. Changes are queued and will sync when you reconnect.',
-        })
-        setIsCloudReady(true)
-        return
+      const nextNotes = remoteNotes.length ? remoteNotes : [createNote()]
+      const shouldSeedFirstNote = !remoteNotes.length && !localNotes.length
+      applyLocalData(
+        nextNotes,
+        remoteShlokas,
+        shouldSeedFirstNote
+          ? {
+              queueCloudSync: true,
+              message: getOnlineStatus()
+                ? 'Saving your first note to Supabase…'
+                : 'Offline. Changes are queued and will sync when you reconnect.',
+            }
+          : undefined,
+      )
+      if (!shouldSeedFirstNote) {
+        skipNextCloudSyncRef.current = true
       }
-
-      skipNextCloudSyncRef.current = true
-      setNotes(remoteNotes)
-      setActiveNoteId(remoteNotes[0]?.id ?? '')
-      setSaveState('saved')
-      setSaveMessage('All changes saved to Supabase.')
       setIsCloudReady(true)
     }
 
@@ -367,49 +433,74 @@ function App() {
       isCancelled = true
       clearSyncTimers()
     }
-  }, [applyLocalNotes, clearSyncTimers, flushPendingSync, persistPendingBuffer])
+  }, [applyLocalData, clearSyncTimers, cloudUserId])
 
   useEffect(() => {
-    if (!cloudUserId) {
+    if (!cloudUserId || !isCloudReady) {
       return
     }
 
-    return subscribeToCloudNotes(cloudUserId, async () => {
+    async function refreshCloudData() {
       if (hasPendingSaveRef.current) {
         return
       }
 
-      const remoteResult = await fetchCloudNotes(cloudUserId)
+      const [remoteNotesResult, remoteShlokasResult] = await Promise.all([
+        fetchCloudNotes(cloudUserId),
+        fetchCloudShlokas(cloudUserId),
+      ])
+      const loadError =
+        !remoteNotesResult.ok
+          ? remoteNotesResult.error
+          : !remoteShlokasResult.ok
+            ? remoteShlokasResult.error
+            : ''
 
-      if (!remoteResult.ok) {
+      if (!remoteNotesResult.ok || !remoteShlokasResult.ok) {
         setSaveState('error')
-        setSaveMessage(`Supabase sync failed: ${remoteResult.error}`)
+        setSaveMessage(`Supabase sync failed: ${loadError}`)
         return
       }
 
-      if (!remoteResult.data.length && notesRef.current.length) {
+      if (
+        (!remoteNotesResult.data.length && notesRef.current.length) ||
+        (!remoteShlokasResult.data.length && shlokasRef.current.length)
+      ) {
         hasPendingSaveRef.current = true
-        persistPendingBuffer(notesRef.current)
+        persistPendingBuffer(notesRef.current, shlokasRef.current)
         setSaveState(getOnlineStatus() ? 'saving' : 'offline')
         setSaveMessage(
           getOnlineStatus()
-            ? 'Supabase returned an empty notebook. Keeping local notes and re-syncing…'
-            : 'Offline. Local notes are preserved and queued for sync.',
+            ? 'Supabase returned empty data. Keeping local data and re-syncing…'
+            : 'Offline. Local data is preserved and queued for sync.',
         )
         return
       }
 
       skipNextCloudSyncRef.current = true
-      setNotes(remoteResult.data)
+      setNotes(remoteNotesResult.data)
+      setShlokas(remoteShlokasResult.data)
       setActiveNoteId((currentActiveId) =>
-        remoteResult.data.some((note) => note.id === currentActiveId)
+        remoteNotesResult.data.some((note) => note.id === currentActiveId)
           ? currentActiveId
-          : remoteResult.data[0]?.id ?? '',
+          : remoteNotesResult.data[0]?.id ?? '',
       )
       setSaveState('saved')
       setSaveMessage('All changes saved to Supabase.')
+    }
+
+    const unsubscribeNotes = subscribeToCloudNotes(cloudUserId, () => {
+      void refreshCloudData()
     })
-  }, [cloudUserId, persistPendingBuffer])
+    const unsubscribeShlokas = subscribeToCloudShlokas(cloudUserId, () => {
+      void refreshCloudData()
+    })
+
+    return () => {
+      unsubscribeNotes()
+      unsubscribeShlokas()
+    }
+  }, [cloudUserId, isCloudReady, persistPendingBuffer])
 
   useEffect(() => {
     const handleOnline = () => {
@@ -455,7 +546,7 @@ function App() {
   useEffect(() => {
     const handlePageExit = () => {
       if (hasPendingSaveRef.current) {
-        persistPendingBuffer(notesRef.current)
+        persistPendingBuffer(notesRef.current, shlokasRef.current)
       }
 
       if (getOnlineStatus() && hasPendingSaveRef.current) {
@@ -473,7 +564,7 @@ function App() {
   }, [flushPendingSync, persistPendingBuffer])
 
   useEffect(() => {
-    if (!cloudUserId) {
+    if (!cloudUserId || !isCloudReady) {
       return
     }
 
@@ -482,12 +573,8 @@ function App() {
       return
     }
 
-    if (!notes.length) {
-      return
-    }
-
     hasPendingSaveRef.current = true
-    if (!persistPendingBuffer(notesRef.current)) {
+    if (!persistPendingBuffer(notesRef.current, shlokasRef.current)) {
       return
     }
 
@@ -512,7 +599,7 @@ function App() {
         cloudSyncTimeoutRef.current = null
       }
     }
-  }, [clearSyncTimers, cloudUserId, flushPendingSync, isOnline, notes, persistPendingBuffer])
+  }, [clearSyncTimers, cloudUserId, flushPendingSync, isCloudReady, isOnline, notes, persistPendingBuffer, shlokas])
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0]
   const tagSummaries = getTagSummaries(notes)
@@ -597,6 +684,66 @@ function App() {
   const memorizingShlokas = filteredShlokas.filter((shloka) => shloka.status === 'memorizing')
   const hasNoShlokaTagMatches =
     Boolean(normalizedShlokaSearch) && !shlokaSearchSuggestions.length && !filteredShlokas.length
+
+  async function handleAuthSubmit() {
+    const email = authEmail.trim()
+    const password = authPassword
+
+    if (!email || !password) {
+      setAuthMessage('Enter both email and password.')
+      return
+    }
+
+    setIsAuthBusy(true)
+
+    if (authMode === 'signin') {
+      const result = await signInWithPassword(email, password)
+      setIsAuthBusy(false)
+
+      if (!result.ok) {
+        setAuthMessage(result.error)
+        return
+      }
+
+      setAuthMessage('Signed in. Loading your notebook…')
+      return
+    }
+
+    const result = await signUpWithPassword(email, password)
+    setIsAuthBusy(false)
+
+    if (!result.ok) {
+      setAuthMessage(result.error)
+      return
+    }
+
+    if (result.data.session) {
+      setAuthMessage('Account created. Loading your notebook…')
+      return
+    }
+
+    setAuthMessage('Account created. If email confirmation is enabled, confirm your email before signing in.')
+    setAuthMode('signin')
+  }
+
+  async function handleSignOut() {
+    const result = await signOutSupabaseUser()
+
+    if (!result.ok) {
+      setSaveState('error')
+      setSaveMessage(`Sign-out failed: ${result.error}`)
+      return
+    }
+
+    setCloudUserId('')
+    setNotes([])
+    setShlokas([])
+    setActiveNoteId('')
+    setAuthPassword('')
+    setIsCloudReady(false)
+    setCurrentPage('editor')
+    setAuthMessage('Signed out. Sign in to access your notes and shlokas.')
+  }
 
   function updateCurrentNote(patch: Partial<Pick<Note, 'title' | 'content'>>) {
     setSaveState('saving')
@@ -757,6 +904,80 @@ function App() {
     setPendingTagFocus(createPendingTagFocus(nextOccurrence))
   }
 
+  if (!isAuthReady) {
+    return (
+      <div className="app-shell">
+        <main className="workspace">
+          <section className="workspace-page">
+            <div className="page-shell">
+              <section className="sidebar-panel page-panel auth-panel">
+                <div className="panel-heading">
+                  <h2>Loading</h2>
+                </div>
+                <p>{saveMessage}</p>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
+    )
+  }
+
+  if (!cloudUserId) {
+    return (
+      <div className="app-shell">
+        <main className="workspace">
+          <section className="workspace-page">
+            <div className="page-shell auth-shell">
+              <section className="sidebar-panel page-panel auth-panel">
+                <div className="panel-heading">
+                  <h2>{authMode === 'signin' ? 'Sign In' : 'Create Account'}</h2>
+                </div>
+                <p>{authMessage}</p>
+                <label className="field-stack">
+                  <span>Email</span>
+                  <input
+                    className="shloka-textarea auth-input"
+                    onChange={(event) => setAuthEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    type="email"
+                    value={authEmail}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span>Password</span>
+                  <input
+                    className="shloka-textarea auth-input"
+                    onChange={(event) => setAuthPassword(event.target.value)}
+                    placeholder="Minimum 6 characters"
+                    type="password"
+                    value={authPassword}
+                  />
+                </label>
+                <div className="auth-actions">
+                  <button className="primary-button" disabled={isAuthBusy} onClick={handleAuthSubmit} type="button">
+                    {isAuthBusy
+                      ? 'Please wait…'
+                      : authMode === 'signin'
+                        ? 'Sign in'
+                        : 'Create account'}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => setAuthMode((current) => (current === 'signin' ? 'signup' : 'signin'))}
+                    type="button"
+                  >
+                    {authMode === 'signin' ? 'Need an account?' : 'Already have an account?'}
+                  </button>
+                </div>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
+    )
+  }
+
   if (!isCloudReady || !activeNote) {
     return (
       <div className="app-shell">
@@ -774,6 +995,9 @@ function App() {
               </button>
               <button className="workspace-nav-link" type="button">
                 <span>Shlokas</span>
+              </button>
+              <button className="workspace-nav-link" type="button">
+                <span>Sign out</span>
               </button>
               <span className={`workspace-save-state ${saveState}`}>{saveMessage}</span>
             </nav>
@@ -826,6 +1050,9 @@ function App() {
               type="button"
             >
               <span>Shlokas</span>
+            </button>
+            <button className="workspace-nav-link" onClick={() => void handleSignOut()} type="button">
+              <span>Sign out</span>
             </button>
             <span className={`workspace-save-state ${saveState}`}>{saveMessage}</span>
           </nav>
