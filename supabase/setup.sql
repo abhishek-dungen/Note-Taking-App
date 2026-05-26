@@ -38,6 +38,15 @@ begin
 end;
 $$;
 
+create or replace function public.touch_keepalive()
+returns table (touched_at timestamptz)
+language sql
+security definer
+set search_path = public
+as $$
+  select timezone('utc', now()) as touched_at;
+$$;
+
 drop trigger if exists set_notes_updated_at on public.notes;
 
 create trigger set_notes_updated_at
@@ -112,6 +121,9 @@ on public.shlokas
 for delete
 to authenticated
 using ((select auth.uid()) = user_id);
+
+revoke all on function public.touch_keepalive() from public;
+grant execute on function public.touch_keepalive() to anon, authenticated;
 
 do $$
 begin

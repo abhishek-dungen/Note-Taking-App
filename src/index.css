@@ -1,11 +1,21 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
 
 :root {
-  --page: #e8edf2;
-  --paper: #ffffff;
-  --ink: #1f2328;
-  --muted: #667281;
-  --border: #d9e0e7;
+  --page: #f4efe3;
+  --page-glow: #fbf8f0;
+  --page-shadow: #e6dcc8;
+  --paper: #fffdf8;
+  --paper-soft: #f8f2e5;
+  --paper-deep: #f0e7d6;
+  --ink: #2f2a24;
+  --ink-soft: #564f46;
+  --muted: #7b7265;
+  --border: #ddd2bc;
+  --border-strong: #cdbd9f;
+  --accent: #91724c;
+  --accent-soft: #eee2cd;
+  --accent-strong: #755934;
+  --focus: rgba(145, 114, 76, 0.28);
   --display: 'Newsreader', 'Source Serif 4', serif;
   --body: 'Manrope', 'IBM Plex Sans', sans-serif;
   color: var(--ink);
@@ -29,8 +39,8 @@ body {
   margin: 0;
   min-width: 320px;
   background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.72), transparent 42%),
-    linear-gradient(180deg, #ecf1f5 0%, #e5ebf1 100%);
+    radial-gradient(circle at top, rgba(255, 252, 245, 0.9), transparent 44%),
+    linear-gradient(180deg, var(--page-glow) 0%, var(--page) 62%, var(--page-shadow) 100%);
 }
 
 button,
@@ -42,7 +52,7 @@ select {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid rgba(40, 89, 214, 0.35);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 

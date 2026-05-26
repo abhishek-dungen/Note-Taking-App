@@ -1,0 +1,33 @@
+name: Supabase Keepalive
+
+on:
+  schedule:
+    - cron: '17 2,14 * * *'
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Touch Supabase
+        env:
+          SUPABASE_URL: https://jrczanyuirjdfsqvuzyq.supabase.co
+          SUPABASE_ANON_KEY: sb_publishable_mlNQw5yb2Ir6joRPPqbwWA_TGMZ57UP
+        run: |
+          response_file="$(mktemp)"
+          http_status=$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$SUPABASE_URL/rest/v1/rpc/touch_keepalive" \
+            --header "apikey: $SUPABASE_ANON_KEY" \
+            --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            --header "Content-Type: application/json" \
+            --data '{}')
+
+          cat "$response_file"
+
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "Supabase keepalive failed with HTTP $http_status"
+            exit 1
+          fi
