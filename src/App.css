@@ -595,6 +595,8 @@
 .document-stage {
   flex: 1;
   padding: 20px 24px 40px;
+  background:
+    linear-gradient(180deg, rgba(241, 232, 214, 0.34) 0%, rgba(232, 221, 198, 0.52) 100%);
   overflow: auto;
 }
 
@@ -603,13 +605,13 @@
   min-height: calc(100vh - 170px);
   margin: 0 auto;
   padding: 48px 60px 72px;
-  border: 1px solid rgba(207, 194, 169, 0.85);
+  border: 1px solid rgba(191, 175, 145, 0.95);
   border-radius: 18px;
   background:
-    linear-gradient(180deg, rgba(255, 254, 250, 0.98) 0%, rgba(253, 249, 241, 0.98) 100%);
+    linear-gradient(180deg, rgba(248, 241, 226, 0.99) 0%, rgba(242, 232, 211, 0.99) 100%);
   box-shadow:
-    0 20px 44px rgba(107, 88, 56, 0.09),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    0 18px 38px rgba(107, 88, 56, 0.08),
+    inset 0 1px 0 rgba(255, 248, 231, 0.45);
 }
 
 .note-title-input {
@@ -634,10 +636,10 @@
 
 .note-editor {
   min-height: 65vh;
-  color: var(--ink);
+  color: #332d26;
   font-family: var(--display);
   font-size: 18px;
-  line-height: 1.85;
+  line-height: 1.92;
   letter-spacing: 0.002em;
   outline: none;
 }
