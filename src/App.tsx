@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSONContent } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import {
@@ -1511,6 +1511,8 @@ function EditorPanel({
   const highlightedTagElementRef = useRef<HTMLElement | null>(null)
   const titleInputRef = useRef<HTMLInputElement | null>(null)
   const documentStageRef = useRef<HTMLDivElement | null>(null)
+  const restoreAnimationFrameRef = useRef<number | null>(null)
+  const restoreTimeoutRef = useRef<number | null>(null)
   const isTitleJumpTarget =
     pendingTagFocus?.noteId === note.id && pendingTagFocus.location === 'title'
   const [tagSuggestionStore] = useState(() => ({
@@ -1575,7 +1577,32 @@ function EditorPanel({
     }
   }, [editor, note.id])
 
+  const saveScrollPosition = useCallback((noteId = note.id) => {
+    const stage = documentStageRef.current
+
+    if (!stage) {
+      return
+    }
+
+    localStorage.setItem(`quiet-notes::scroll::${noteId}`, String(stage.scrollTop))
+  }, [note.id])
+
   useEffect(() => {
+    const handlePageExit = () => {
+      saveScrollPosition()
+    }
+
+    window.addEventListener('pagehide', handlePageExit)
+    window.addEventListener('beforeunload', handlePageExit)
+
+    return () => {
+      saveScrollPosition()
+      window.removeEventListener('pagehide', handlePageExit)
+      window.removeEventListener('beforeunload', handlePageExit)
+    }
+  }, [saveScrollPosition])
+
+  useLayoutEffect(() => {
     if (!editor) {
       return
     }
@@ -1586,10 +1613,7 @@ function EditorPanel({
 
     // Save scroll position of previous note before switching
     if (activeNoteRef.current && activeNoteRef.current !== note.id && documentStageRef.current) {
-      localStorage.setItem(
-        `quiet-notes::scroll::${activeNoteRef.current}`,
-        String(documentStageRef.current.scrollTop),
-      )
+      saveScrollPosition(activeNoteRef.current)
     }
 
     if (activeNoteRef.current !== note.id) {
@@ -1605,7 +1629,6 @@ function EditorPanel({
         const docSize = editor.state.doc.content.size
         if (from >= 0 && to <= docSize) {
           editor.commands.setTextSelection({ from, to })
-          editor.commands.focus()
           restored = true
         }
       } catch (e) {
@@ -1614,10 +1637,20 @@ function EditorPanel({
     }
 
     if (!restored) {
-      editor.commands.focus('end')
+      editor.commands.blur()
     }
 
     // Restore scroll position with retry-based layout resilience
+    if (restoreAnimationFrameRef.current) {
+      cancelAnimationFrame(restoreAnimationFrameRef.current)
+      restoreAnimationFrameRef.current = null
+    }
+
+    if (restoreTimeoutRef.current) {
+      window.clearTimeout(restoreTimeoutRef.current)
+      restoreTimeoutRef.current = null
+    }
+
     const storedScroll = localStorage.getItem(`quiet-notes::scroll::${note.id}`)
     if (storedScroll) {
       const scrollTopVal = Number(storedScroll)
@@ -1630,21 +1663,33 @@ function EditorPanel({
             return
           }
           attempts++
-          requestAnimationFrame(restoreScroll)
+          restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
         } else {
           attempts++
-          requestAnimationFrame(restoreScroll)
+          restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
         }
       }
 
-      setTimeout(() => {
-        requestAnimationFrame(restoreScroll)
+      restoreTimeoutRef.current = window.setTimeout(() => {
+        restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
       }, 100)
     }
 
     activeNoteRef.current = note.id
     hasRestoredInitialRef.current = true
-  }, [editor, note.content, note.id])
+
+    return () => {
+      if (restoreAnimationFrameRef.current) {
+        cancelAnimationFrame(restoreAnimationFrameRef.current)
+        restoreAnimationFrameRef.current = null
+      }
+
+      if (restoreTimeoutRef.current) {
+        window.clearTimeout(restoreTimeoutRef.current)
+        restoreTimeoutRef.current = null
+      }
+    }
+  }, [editor, note.content, note.id, saveScrollPosition])
 
   useEffect(() => {
     const clearHighlightedTag = () => {
@@ -2036,7 +2081,10 @@ function EditorPanel({
           className="document-stage"
           ref={documentStageRef}
           onScroll={(event) => {
-            localStorage.setItem(`quiet-notes::scroll::${note.id}`, String(event.currentTarget.scrollTop))
+            localStorage.setItem(
+              `quiet-notes::scroll::${note.id}`,
+              String(event.currentTarget.scrollTop),
+            )
           }}
         >
           <article className="document-page">
