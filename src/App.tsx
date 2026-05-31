@@ -123,8 +123,20 @@ function hasLegacyLocalData() {
 }
 
 function App() {
-  const [notes, setNotes] = useState<Note[]>([])
-  const [shlokas, setShlokas] = useState<Shloka[]>([])
+  const [notes, setNotes] = useState<Note[]>(() => {
+    if (typeof window !== 'undefined') {
+      const lastUserId = window.localStorage.getItem('quiet-notes::last-user-id') ?? ''
+      return loadNotes(lastUserId)
+    }
+    return []
+  })
+  const [shlokas, setShlokas] = useState<Shloka[]>(() => {
+    if (typeof window !== 'undefined') {
+      const lastUserId = window.localStorage.getItem('quiet-notes::last-user-id') ?? ''
+      return loadShlokas(lastUserId)
+    }
+    return []
+  })
   const [activeNoteId, setActiveNoteId] = useState(() => {
     if (typeof window !== 'undefined') {
       return window.localStorage.getItem('quiet-notes::active-note-id') ?? ''
@@ -174,6 +186,9 @@ function App() {
 
   useEffect(() => {
     cloudUserIdRef.current = cloudUserId
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('quiet-notes::last-user-id', cloudUserId)
+    }
   }, [cloudUserId])
 
   useEffect(() => {
@@ -1043,7 +1058,7 @@ function App() {
     )
   }
 
-  if (!isCloudReady || !activeNote) {
+  if (!activeNote) {
     return (
       <div className="app-shell">
         <main className="workspace">
