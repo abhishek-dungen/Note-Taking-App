@@ -8,6 +8,7 @@ import {
   AlignRight,
   Bold,
   ChevronDown,
+  Eraser,
   Highlighter,
   ImagePlus,
   Italic,
@@ -103,7 +104,8 @@ const LINE_HEIGHTS = [
 ]
 
 const TEXT_COLORS = ['#1f2328', '#5f6368', '#0b57d0', '#196c2e', '#b3261e', '#7c4dff']
-const HIGHLIGHT_COLORS = ['#fff59d', '#ffd9a8', '#b9f6ca', '#d7efff', '#f0d9ff', '#ffd6e7']
+const PERSISTENT_HIGHLIGHT_COLOR = '#b9f6ca'
+const HIGHLIGHT_COLORS = [PERSISTENT_HIGHLIGHT_COLOR, '#fff59d', '#ffd9a8', '#d7efff', '#f0d9ff', '#ffd6e7']
 const PARAGRAPH_STYLES = [{ label: 'Normal text', value: 'paragraph' }]
 const SAVE_DEBOUNCE_MS = 450
 const RETRY_DELAY_MS = 2500
@@ -1883,6 +1885,7 @@ function EditorPanel({
           isBullet: false,
           isOrdered: false,
           isChecklist: false,
+          isHighlighted: false,
           alignment: 'left',
           color: TEXT_COLORS[0],
           highlight: HIGHLIGHT_COLORS[0],
@@ -1906,6 +1909,7 @@ function EditorPanel({
         isBullet: currentEditor.isActive('bulletList'),
         isOrdered: currentEditor.isActive('orderedList'),
         isChecklist: currentEditor.isActive('taskList'),
+        isHighlighted: currentEditor.isActive('highlight'),
         alignment: paragraph.textAlign ?? heading.textAlign ?? 'left',
         color: textStyle.color ?? TEXT_COLORS[0],
         highlight: highlight.color ?? HIGHLIGHT_COLORS[0],
@@ -2051,6 +2055,32 @@ function EditorPanel({
           </div>
 
           <div className="toolbar-group color-group">
+            <button
+              aria-label="Highlight selected text"
+              className={`icon-button icon-only${editorState?.isHighlighted ? ' active' : ''}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() =>
+                editor
+                  ?.chain()
+                  .focus()
+                  .setHighlight({ color: PERSISTENT_HIGHLIGHT_COLOR })
+                  .run()
+              }
+              type="button"
+              title="Highlight selected text"
+            >
+              <Highlighter size={18} />
+            </button>
+            <button
+              aria-label="Remove highlight"
+              className="icon-button icon-only"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => editor?.chain().focus().unsetHighlight().run()}
+              type="button"
+              title="Remove highlight"
+            >
+              <Eraser size={18} />
+            </button>
             <label className="color-field">
               <span>
                 <PaintBucket size={17} />
