@@ -109,7 +109,7 @@ const HIGHLIGHT_COLORS = [PERSISTENT_HIGHLIGHT_COLOR, '#fff59d', '#ffd9a8', '#d7
 const PARAGRAPH_STYLES = [{ label: 'Normal text', value: 'paragraph' }]
 const SAVE_DEBOUNCE_MS = 450
 const RETRY_DELAY_MS = 2500
-const SCROLL_RESTORE_ATTEMPTS = 90
+const SCROLL_RESTORE_ATTEMPTS = 18
 
 type NoteScrollSnapshot = {
   stageTop: number
@@ -1728,11 +1728,31 @@ function EditorPanel({
       restoreTimeoutRef.current = null
     }
 
+    const cancelRestore = () => {
+      isRestoringScrollRef.current = false
+
+      if (restoreAnimationFrameRef.current) {
+        cancelAnimationFrame(restoreAnimationFrameRef.current)
+        restoreAnimationFrameRef.current = null
+      }
+
+      if (restoreTimeoutRef.current) {
+        window.clearTimeout(restoreTimeoutRef.current)
+        restoreTimeoutRef.current = null
+      }
+    }
+
+    const restoreStage = documentStageRef.current
+
     if (scrollSnapshot) {
       let attempts = 0
       isRestoringScrollRef.current = true
 
       const restoreScroll = () => {
+        if (!isRestoringScrollRef.current) {
+          return
+        }
+
         const stage = documentStageRef.current
         if (stage) {
           stage.scrollTop = scrollSnapshot.stageTop
@@ -1768,9 +1788,19 @@ function EditorPanel({
         }
       }
 
+      restoreStage?.addEventListener('wheel', cancelRestore, { passive: true })
+      restoreStage?.addEventListener('touchstart', cancelRestore, { passive: true })
+      restoreStage?.addEventListener('pointerdown', cancelRestore)
+      window.addEventListener('wheel', cancelRestore, { passive: true })
+      window.addEventListener('touchstart', cancelRestore, { passive: true })
+      window.addEventListener('keydown', cancelRestore)
+
+      restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
       restoreTimeoutRef.current = window.setTimeout(() => {
-        restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
-      }, 100)
+        if (isRestoringScrollRef.current) {
+          restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
+        }
+      }, 120)
     }
 
     activeNoteRef.current = note.id
@@ -1789,6 +1819,13 @@ function EditorPanel({
         window.clearTimeout(restoreTimeoutRef.current)
         restoreTimeoutRef.current = null
       }
+
+      restoreStage?.removeEventListener('wheel', cancelRestore)
+      restoreStage?.removeEventListener('touchstart', cancelRestore)
+      restoreStage?.removeEventListener('pointerdown', cancelRestore)
+      window.removeEventListener('wheel', cancelRestore)
+      window.removeEventListener('touchstart', cancelRestore)
+      window.removeEventListener('keydown', cancelRestore)
     }
   }, [editor, note.content, note.id, saveScrollPosition])
 
