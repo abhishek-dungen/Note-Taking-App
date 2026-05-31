@@ -1513,6 +1513,8 @@ function EditorPanel({
   const documentStageRef = useRef<HTMLDivElement | null>(null)
   const restoreAnimationFrameRef = useRef<number | null>(null)
   const restoreTimeoutRef = useRef<number | null>(null)
+  const isRestoringScrollRef = useRef(false)
+  const restoredContentRef = useRef<JSONContent | null>(null)
   const isTitleJumpTarget =
     pendingTagFocus?.noteId === note.id && pendingTagFocus.location === 'title'
   const [tagSuggestionStore] = useState(() => ({
@@ -1580,7 +1582,7 @@ function EditorPanel({
   const saveScrollPosition = useCallback((noteId = note.id) => {
     const stage = documentStageRef.current
 
-    if (!stage) {
+    if (!stage || isRestoringScrollRef.current) {
       return
     }
 
@@ -1607,29 +1609,39 @@ function EditorPanel({
       return
     }
 
-    if (activeNoteRef.current === note.id && hasRestoredInitialRef.current) {
+    const isSameNote = activeNoteRef.current === note.id
+    const isSameContent = restoredContentRef.current === note.content
+
+    if (isSameNote && isSameContent && hasRestoredInitialRef.current) {
       return
     }
 
     // Save scroll position of previous note before switching
-    if (activeNoteRef.current && activeNoteRef.current !== note.id && documentStageRef.current) {
+    if (activeNoteRef.current && !isSameNote && documentStageRef.current) {
       saveScrollPosition(activeNoteRef.current)
     }
 
-    if (activeNoteRef.current !== note.id) {
+    if (!isSameNote || !isSameContent) {
       editor.commands.setContent(note.content, { emitUpdate: false })
     }
 
+    const storedScroll = localStorage.getItem(`quiet-notes::scroll::${note.id}`)
+    const scrollTopVal = storedScroll === null ? null : Number(storedScroll)
+    const hasStoredScroll = typeof scrollTopVal === 'number' && Number.isFinite(scrollTopVal)
+
     // Restore selection/cursor position
-    const storedSelection = localStorage.getItem(`quiet-notes::selection::${note.id}`)
     let restored = false
-    if (storedSelection) {
+    if (!hasStoredScroll) {
+      const storedSelection = localStorage.getItem(`quiet-notes::selection::${note.id}`)
+
       try {
-        const { from, to } = JSON.parse(storedSelection)
-        const docSize = editor.state.doc.content.size
-        if (from >= 0 && to <= docSize) {
-          editor.commands.setTextSelection({ from, to })
-          restored = true
+        if (storedSelection) {
+          const { from, to } = JSON.parse(storedSelection)
+          const docSize = editor.state.doc.content.size
+          if (from >= 0 && to <= docSize) {
+            editor.commands.setTextSelection({ from, to })
+            restored = true
+          }
         }
       } catch (e) {
         console.error('Failed to restore selection', e)
@@ -1651,20 +1663,25 @@ function EditorPanel({
       restoreTimeoutRef.current = null
     }
 
-    const storedScroll = localStorage.getItem(`quiet-notes::scroll::${note.id}`)
-    if (storedScroll) {
-      const scrollTopVal = Number(storedScroll)
+    if (hasStoredScroll) {
       let attempts = 0
+      isRestoringScrollRef.current = true
+
       const restoreScroll = () => {
         const stage = documentStageRef.current
         if (stage) {
           stage.scrollTop = scrollTopVal
-          if (Math.abs(stage.scrollTop - scrollTopVal) < 2 || attempts > 20) {
+          if (attempts > 60) {
+            isRestoringScrollRef.current = false
             return
           }
           attempts++
           restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
         } else {
+          if (attempts > 60) {
+            isRestoringScrollRef.current = false
+            return
+          }
           attempts++
           restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
         }
@@ -1677,8 +1694,11 @@ function EditorPanel({
 
     activeNoteRef.current = note.id
     hasRestoredInitialRef.current = true
+    restoredContentRef.current = note.content
 
     return () => {
+      isRestoringScrollRef.current = false
+
       if (restoreAnimationFrameRef.current) {
         cancelAnimationFrame(restoreAnimationFrameRef.current)
         restoreAnimationFrameRef.current = null
@@ -2081,6 +2101,10 @@ function EditorPanel({
           className="document-stage"
           ref={documentStageRef}
           onScroll={(event) => {
+            if (isRestoringScrollRef.current) {
+              return
+            }
+
             localStorage.setItem(
               `quiet-notes::scroll::${note.id}`,
               String(event.currentTarget.scrollTop),
