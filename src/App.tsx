@@ -345,10 +345,13 @@ function App() {
     void hydrateAuth()
 
     const unsubscribe = subscribeToAuthStateChanges((_event, session) => {
-      setCloudUserId(session?.user?.id ?? '')
-      setIsCloudReady(false)
-      hasPendingSaveRef.current = false
-      clearSyncTimers()
+      const nextUserId = session?.user?.id ?? ''
+      if (nextUserId !== cloudUserIdRef.current) {
+        setCloudUserId(nextUserId)
+        setIsCloudReady(false)
+        hasPendingSaveRef.current = false
+        clearSyncTimers()
+      }
     })
 
     return () => {
