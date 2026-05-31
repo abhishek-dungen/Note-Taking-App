@@ -112,6 +112,8 @@ const SCROLL_RESTORE_ATTEMPTS = 90
 type NoteScrollSnapshot = {
   stageTop: number
   windowTop: number
+  anchorIndex?: number
+  anchorOffset?: number
 }
 
 function getOnlineStatus() {
@@ -143,11 +145,15 @@ function readNoteScrollSnapshot(noteId: string): NoteScrollSnapshot | null {
     const parsed = JSON.parse(storedScroll) as Partial<NoteScrollSnapshot>
     const stageTop = Number(parsed.stageTop)
     const windowTop = Number(parsed.windowTop)
+    const anchorIndex = Number(parsed.anchorIndex)
+    const anchorOffset = Number(parsed.anchorOffset)
 
     if (Number.isFinite(stageTop) || Number.isFinite(windowTop)) {
       return {
         stageTop: Number.isFinite(stageTop) ? stageTop : 0,
         windowTop: Number.isFinite(windowTop) ? windowTop : 0,
+        anchorIndex: Number.isFinite(anchorIndex) ? anchorIndex : undefined,
+        anchorOffset: Number.isFinite(anchorOffset) ? anchorOffset : undefined,
       }
     }
   } catch {
@@ -1621,6 +1627,33 @@ function EditorPanel({
     }
   }, [editor, note.id])
 
+  const getScrollAnchor = useCallback((): Pick<NoteScrollSnapshot, 'anchorIndex' | 'anchorOffset'> => {
+    const stage = documentStageRef.current
+
+    if (!stage) {
+      return {}
+    }
+
+    const blocks = Array.from(
+      stage.querySelectorAll<HTMLElement>('.note-title-input, .note-editor > *'),
+    )
+    const stageTop = stage.getBoundingClientRect().top
+    const targetTop = stageTop + 8
+    const anchorIndex = blocks.findIndex((block) => {
+      const rect = block.getBoundingClientRect()
+      return rect.bottom >= targetTop
+    })
+
+    if (anchorIndex < 0) {
+      return {}
+    }
+
+    return {
+      anchorIndex,
+      anchorOffset: blocks[anchorIndex].getBoundingClientRect().top - stageTop,
+    }
+  }, [])
+
   const saveScrollPosition = useCallback((noteId = note.id) => {
     const stage = documentStageRef.current
 
@@ -1631,10 +1664,11 @@ function EditorPanel({
     const snapshot: NoteScrollSnapshot = {
       stageTop: stage.scrollTop,
       windowTop: window.scrollY,
+      ...getScrollAnchor(),
     }
 
     localStorage.setItem(getNoteScrollKey(noteId), JSON.stringify(snapshot))
-  }, [note.id])
+  }, [getScrollAnchor, note.id])
 
   useEffect(() => {
     const handlePageExit = () => {
@@ -1679,6 +1713,7 @@ function EditorPanel({
     const scrollSnapshot = readNoteScrollSnapshot(note.id)
 
     editor.commands.blur()
+    window.getSelection()?.removeAllRanges()
 
     // Restore scroll position with retry-based layout resilience
     if (restoreAnimationFrameRef.current) {
@@ -1700,6 +1735,21 @@ function EditorPanel({
         if (stage) {
           stage.scrollTop = scrollSnapshot.stageTop
           window.scrollTo(0, scrollSnapshot.windowTop)
+
+          if (
+            typeof scrollSnapshot.anchorIndex === 'number' &&
+            typeof scrollSnapshot.anchorOffset === 'number'
+          ) {
+            const blocks = stage.querySelectorAll<HTMLElement>('.note-title-input, .note-editor > *')
+            const anchor = blocks[scrollSnapshot.anchorIndex]
+
+            if (anchor) {
+              const stageTop = stage.getBoundingClientRect().top
+              const anchorTop = anchor.getBoundingClientRect().top
+              stage.scrollTop += anchorTop - stageTop - scrollSnapshot.anchorOffset
+            }
+          }
+
           if (attempts > SCROLL_RESTORE_ATTEMPTS) {
             isRestoringScrollRef.current = false
             return
@@ -2137,6 +2187,7 @@ function EditorPanel({
             const snapshot: NoteScrollSnapshot = {
               stageTop: event.currentTarget.scrollTop,
               windowTop: window.scrollY,
+              ...getScrollAnchor(),
             }
 
             localStorage.setItem(
