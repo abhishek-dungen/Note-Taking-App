@@ -1557,24 +1557,6 @@ function EditorPanel({
     }
   }, [editor, onContentChange])
 
-  // Save scroll position when container is scrolled
-  useEffect(() => {
-    const stage = documentStageRef.current
-    if (!stage) {
-      return
-    }
-
-    const handleScroll = () => {
-      localStorage.setItem(`quiet-notes::scroll::${note.id}`, String(stage.scrollTop))
-    }
-
-    stage.addEventListener('scroll', handleScroll, { passive: true })
-
-    return () => {
-      stage.removeEventListener('scroll', handleScroll)
-    }
-  }, [note.id])
-
   // Save cursor/selection position when selection changes
   useEffect(() => {
     if (!editor) {
@@ -1635,15 +1617,29 @@ function EditorPanel({
       editor.commands.focus('end')
     }
 
-    // Restore scroll position
+    // Restore scroll position with retry-based layout resilience
     const storedScroll = localStorage.getItem(`quiet-notes::scroll::${note.id}`)
-    if (storedScroll && documentStageRef.current) {
+    if (storedScroll) {
       const scrollTopVal = Number(storedScroll)
-      setTimeout(() => {
-        if (documentStageRef.current) {
-          documentStageRef.current.scrollTop = scrollTopVal
+      let attempts = 0
+      const restoreScroll = () => {
+        const stage = documentStageRef.current
+        if (stage) {
+          stage.scrollTop = scrollTopVal
+          if (Math.abs(stage.scrollTop - scrollTopVal) < 2 || attempts > 20) {
+            return
+          }
+          attempts++
+          requestAnimationFrame(restoreScroll)
+        } else {
+          attempts++
+          requestAnimationFrame(restoreScroll)
         }
-      }, 0)
+      }
+
+      setTimeout(() => {
+        requestAnimationFrame(restoreScroll)
+      }, 100)
     }
 
     activeNoteRef.current = note.id
@@ -2036,7 +2032,13 @@ function EditorPanel({
         </div>
       ) : null}
       <section className="editor-surface">
-        <div className="document-stage" ref={documentStageRef}>
+        <div
+          className="document-stage"
+          ref={documentStageRef}
+          onScroll={(event) => {
+            localStorage.setItem(`quiet-notes::scroll::${note.id}`, String(event.currentTarget.scrollTop))
+          }}
+        >
           <article className="document-page">
             <input
               className={`note-title-input${isTitleJumpTarget ? ' is-jump-target' : ''}`}
