@@ -125,7 +125,12 @@ function hasLegacyLocalData() {
 function App() {
   const [notes, setNotes] = useState<Note[]>([])
   const [shlokas, setShlokas] = useState<Shloka[]>([])
-  const [activeNoteId, setActiveNoteId] = useState('')
+  const [activeNoteId, setActiveNoteId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem('quiet-notes::active-note-id') ?? ''
+    }
+    return ''
+  })
   const [currentPage, setCurrentPage] = useState<PageView>('editor')
   const [tagSearch, setTagSearch] = useState('')
   const [selectedTagId, setSelectedTagId] = useState('')
@@ -170,6 +175,12 @@ function App() {
   useEffect(() => {
     cloudUserIdRef.current = cloudUserId
   }, [cloudUserId])
+
+  useEffect(() => {
+    if (activeNoteId) {
+      window.localStorage.setItem('quiet-notes::active-note-id', activeNoteId)
+    }
+  }, [activeNoteId])
 
   useEffect(() => {
     if (!cloudUserId || !isCloudReady) {
@@ -223,9 +234,13 @@ function App() {
     ) => {
       setNotes(nextNotes)
       setShlokas(nextShlokas)
-      setActiveNoteId((currentActiveId) =>
-        nextNotes.some((note) => note.id === currentActiveId) ? currentActiveId : nextNotes[0]?.id ?? '',
-      )
+      setActiveNoteId((currentActiveId) => {
+        const storedActiveId = typeof window !== 'undefined' ? window.localStorage.getItem('quiet-notes::active-note-id') : null
+        if (storedActiveId && nextNotes.some((note) => note.id === storedActiveId)) {
+          return storedActiveId
+        }
+        return nextNotes.some((note) => note.id === currentActiveId) ? currentActiveId : nextNotes[0]?.id ?? ''
+      })
 
       if (options?.queueCloudSync) {
         hasPendingSaveRef.current = true
@@ -1473,9 +1488,11 @@ function EditorPanel({
   tagJumpTotal,
   tagSuggestions,
 }: EditorPanelProps) {
-  const activeNoteRef = useRef(note.id)
+  const activeNoteRef = useRef('') // Initialize to empty to trigger first load restore
+  const hasRestoredInitialRef = useRef(false)
   const highlightedTagElementRef = useRef<HTMLElement | null>(null)
   const titleInputRef = useRef<HTMLInputElement | null>(null)
+  const documentStageRef = useRef<HTMLDivElement | null>(null)
   const isTitleJumpTarget =
     pendingTagFocus?.noteId === note.id && pendingTagFocus.location === 'title'
   const [tagSuggestionStore] = useState(() => ({
@@ -1522,18 +1539,97 @@ function EditorPanel({
     }
   }, [editor, onContentChange])
 
+  // Save scroll position when container is scrolled
+  useEffect(() => {
+    const stage = documentStageRef.current
+    if (!stage) {
+      return
+    }
+
+    const handleScroll = () => {
+      localStorage.setItem(`quiet-notes::scroll::${note.id}`, String(stage.scrollTop))
+    }
+
+    stage.addEventListener('scroll', handleScroll, { passive: true })
+
+    return () => {
+      stage.removeEventListener('scroll', handleScroll)
+    }
+  }, [note.id])
+
+  // Save cursor/selection position when selection changes
   useEffect(() => {
     if (!editor) {
       return
     }
 
-    if (activeNoteRef.current === note.id) {
+    const handleSelectionUpdate = () => {
+      const { from, to } = editor.state.selection
+      localStorage.setItem(`quiet-notes::selection::${note.id}`, JSON.stringify({ from, to }))
+    }
+
+    editor.on('selectionUpdate', handleSelectionUpdate)
+
+    return () => {
+      editor.off('selectionUpdate', handleSelectionUpdate)
+    }
+  }, [editor, note.id])
+
+  useEffect(() => {
+    if (!editor) {
       return
     }
 
-    editor.commands.setContent(note.content, { emitUpdate: false })
-    editor.commands.focus('end')
+    if (activeNoteRef.current === note.id && hasRestoredInitialRef.current) {
+      return
+    }
+
+    // Save scroll position of previous note before switching
+    if (activeNoteRef.current && activeNoteRef.current !== note.id && documentStageRef.current) {
+      localStorage.setItem(
+        `quiet-notes::scroll::${activeNoteRef.current}`,
+        String(documentStageRef.current.scrollTop),
+      )
+    }
+
+    if (activeNoteRef.current !== note.id) {
+      editor.commands.setContent(note.content, { emitUpdate: false })
+    }
+
+    // Restore selection/cursor position
+    const storedSelection = localStorage.getItem(`quiet-notes::selection::${note.id}`)
+    let restored = false
+    if (storedSelection) {
+      try {
+        const { from, to } = JSON.parse(storedSelection)
+        const docSize = editor.state.doc.content.size
+        if (from >= 0 && to <= docSize) {
+          editor.commands.setTextSelection({ from, to })
+          editor.commands.focus()
+          restored = true
+        }
+      } catch (e) {
+        console.error('Failed to restore selection', e)
+      }
+    }
+
+    if (!restored) {
+      editor.commands.focus('end')
+    }
+
+    // Restore scroll position
+    const storedScroll = localStorage.getItem(`quiet-notes::scroll::${note.id}`)
+    if (storedScroll && documentStageRef.current) {
+      const scrollTopVal = Number(storedScroll)
+      setTimeout(() => {
+        if (documentStageRef.current) {
+          documentStageRef.current.scrollTop = scrollTopVal
+        }
+      }, 0)
+    }
+
     activeNoteRef.current = note.id
+    hasRestoredInitialRef.current = true
   }, [editor, note.content, note.id])
 
   useEffect(() => {
@@ -1922,7 +2018,7 @@ function EditorPanel({
         </div>
       ) : null}
       <section className="editor-surface">
-        <div className="document-stage">
+        <div className="document-stage" ref={documentStageRef}>
           <article className="document-page">
             <input
               className={`note-title-input${isTitleJumpTarget ? ' is-jump-target' : ''}`}
