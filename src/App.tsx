@@ -107,6 +107,12 @@ const HIGHLIGHT_COLORS = ['#fff59d', '#ffd9a8', '#b9f6ca', '#d7efff', '#f0d9ff',
 const PARAGRAPH_STYLES = [{ label: 'Normal text', value: 'paragraph' }]
 const SAVE_DEBOUNCE_MS = 450
 const RETRY_DELAY_MS = 2500
+const SCROLL_RESTORE_ATTEMPTS = 90
+
+type NoteScrollSnapshot = {
+  stageTop: number
+  windowTop: number
+}
 
 function getOnlineStatus() {
   return typeof navigator === 'undefined' ? true : navigator.onLine
@@ -120,6 +126,42 @@ function hasLegacyLocalData() {
   const legacyNotes = parseStoredNotes(window.localStorage.getItem(STORAGE_KEY))
   const legacyShlokas = parseStoredShlokas(window.localStorage.getItem(SHLOKAS_STORAGE_KEY))
   return Boolean(legacyNotes?.length || legacyShlokas?.length)
+}
+
+function getNoteScrollKey(noteId: string) {
+  return `quiet-notes::scroll::${noteId}`
+}
+
+function readNoteScrollSnapshot(noteId: string): NoteScrollSnapshot | null {
+  const storedScroll = localStorage.getItem(getNoteScrollKey(noteId))
+
+  if (!storedScroll) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(storedScroll) as Partial<NoteScrollSnapshot>
+    const stageTop = Number(parsed.stageTop)
+    const windowTop = Number(parsed.windowTop)
+
+    if (Number.isFinite(stageTop) || Number.isFinite(windowTop)) {
+      return {
+        stageTop: Number.isFinite(stageTop) ? stageTop : 0,
+        windowTop: Number.isFinite(windowTop) ? windowTop : 0,
+      }
+    }
+  } catch {
+    const legacyTop = Number(storedScroll)
+
+    if (Number.isFinite(legacyTop)) {
+      return {
+        stageTop: legacyTop,
+        windowTop: legacyTop,
+      }
+    }
+  }
+
+  return null
 }
 
 function App() {
@@ -1586,7 +1628,12 @@ function EditorPanel({
       return
     }
 
-    localStorage.setItem(`quiet-notes::scroll::${noteId}`, String(stage.scrollTop))
+    const snapshot: NoteScrollSnapshot = {
+      stageTop: stage.scrollTop,
+      windowTop: window.scrollY,
+    }
+
+    localStorage.setItem(getNoteScrollKey(noteId), JSON.stringify(snapshot))
   }, [note.id])
 
   useEffect(() => {
@@ -1596,11 +1643,15 @@ function EditorPanel({
 
     window.addEventListener('pagehide', handlePageExit)
     window.addEventListener('beforeunload', handlePageExit)
+    window.addEventListener('visibilitychange', handlePageExit)
+    window.addEventListener('scroll', handlePageExit, { passive: true })
 
     return () => {
       saveScrollPosition()
       window.removeEventListener('pagehide', handlePageExit)
       window.removeEventListener('beforeunload', handlePageExit)
+      window.removeEventListener('visibilitychange', handlePageExit)
+      window.removeEventListener('scroll', handlePageExit)
     }
   }, [saveScrollPosition])
 
@@ -1625,32 +1676,9 @@ function EditorPanel({
       editor.commands.setContent(note.content, { emitUpdate: false })
     }
 
-    const storedScroll = localStorage.getItem(`quiet-notes::scroll::${note.id}`)
-    const scrollTopVal = storedScroll === null ? null : Number(storedScroll)
-    const hasStoredScroll = typeof scrollTopVal === 'number' && Number.isFinite(scrollTopVal)
+    const scrollSnapshot = readNoteScrollSnapshot(note.id)
 
-    // Restore selection/cursor position
-    let restored = false
-    if (!hasStoredScroll) {
-      const storedSelection = localStorage.getItem(`quiet-notes::selection::${note.id}`)
-
-      try {
-        if (storedSelection) {
-          const { from, to } = JSON.parse(storedSelection)
-          const docSize = editor.state.doc.content.size
-          if (from >= 0 && to <= docSize) {
-            editor.commands.setTextSelection({ from, to })
-            restored = true
-          }
-        }
-      } catch (e) {
-        console.error('Failed to restore selection', e)
-      }
-    }
-
-    if (!restored) {
-      editor.commands.blur()
-    }
+    editor.commands.blur()
 
     // Restore scroll position with retry-based layout resilience
     if (restoreAnimationFrameRef.current) {
@@ -1663,22 +1691,23 @@ function EditorPanel({
       restoreTimeoutRef.current = null
     }
 
-    if (hasStoredScroll) {
+    if (scrollSnapshot) {
       let attempts = 0
       isRestoringScrollRef.current = true
 
       const restoreScroll = () => {
         const stage = documentStageRef.current
         if (stage) {
-          stage.scrollTop = scrollTopVal
-          if (attempts > 60) {
+          stage.scrollTop = scrollSnapshot.stageTop
+          window.scrollTo(0, scrollSnapshot.windowTop)
+          if (attempts > SCROLL_RESTORE_ATTEMPTS) {
             isRestoringScrollRef.current = false
             return
           }
           attempts++
           restoreAnimationFrameRef.current = requestAnimationFrame(restoreScroll)
         } else {
-          if (attempts > 60) {
+          if (attempts > SCROLL_RESTORE_ATTEMPTS) {
             isRestoringScrollRef.current = false
             return
           }
@@ -2105,9 +2134,14 @@ function EditorPanel({
               return
             }
 
+            const snapshot: NoteScrollSnapshot = {
+              stageTop: event.currentTarget.scrollTop,
+              windowTop: window.scrollY,
+            }
+
             localStorage.setItem(
-              `quiet-notes::scroll::${note.id}`,
-              String(event.currentTarget.scrollTop),
+              getNoteScrollKey(note.id),
+              JSON.stringify(snapshot),
             )
           }}
         >
